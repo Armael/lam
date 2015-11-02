@@ -139,7 +139,7 @@ let rec cps e =
 
   match e with
   | Var _ | Atom _ ->
-    Lambda (k, Lambda (kf, App (Var k, e)))
+    lam [k; kf] (App (Var k, e))
   | Prim (n, p) ->
     let p' =
       Prim (n + 2, fun l ->
@@ -148,25 +148,30 @@ let rec cps e =
           App (k, p (List.rev args))
         | _ -> assert false)
     in
-    Lambda (k, Lambda (kf, App (Var k, p')))
+    lam [k; kf] (App (Var k, p'))
 
   | Lambda (x, e) ->
-    Lambda (k, Lambda (kf, App (Var k, Lambda (x, cps e))))
+    lam [k; kf] (App (Var k, Lambda (x, cps e)))
   | App (u, v) ->
     let val_u = Ident.create "v" in
     let val_v = Ident.create "v" in
-    Lambda (k,
-      Lambda (kf, 
-        cont (cps u) (Lambda (val_u,
-          cont (cps v) (Lambda (val_v,
-            cont (App (Var val_u, Var val_v)) (Var k) (Var kf))) (Var kf))) (Var kf)))
+    lam [k; kf] (
+      (cont (cps u)
+         (lam [val_u]
+            (cont (cps v)
+               (lam [val_v]
+                  (cont (App (Var val_u, Var val_v))
+                     (Var k) (Var kf)))
+               (Var kf)))
+         (Var kf))
+    )
 
   | Perform e ->
     let val_e = Ident.create "e" in
     lam [k; kf] (
       cont (cps e)
         (lam [val_e]
-           (App (App (Var kf, Var val_e), Var k))
+           (app (Var kf) [Var val_e; Var k])
         ) (Var kf)
     )
 
