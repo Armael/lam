@@ -118,7 +118,8 @@ let rec subst map e =
 let rec cps e =
   let k = Ident.create "k" in
   let kf = Ident.create "kf" in
-  let cont e c cf =
+  let gf = Ident.create "γf" in
+  let cont e c cf gf =
     let is_value = function
       | Var _ | Atom _ | Prim _ -> true
       | _ -> false in
@@ -134,12 +135,12 @@ let rec cps e =
       end
 
     | _ ->
-      App (App (e, c), cf)
+      app e [c; cf; gf]
   in
 
   match e with
   | Var _ | Atom _ ->
-    Lambda (k, Lambda (kf, App (Var k, e)))
+    lam [k; kf; gf] (App (Var k, e))
   | Prim (n, p) ->
     let p' =
       Prim (n + 3, fun l ->
@@ -148,38 +149,25 @@ let rec cps e =
           App (k, p (List.rev args))
         | _ -> assert false)
     in
-    Lambda (k, Lambda (kf, App (Var k, p')))
+    lam [k; kf; gf] (App (Var k, p'))
 
   | Lambda (x, e) ->
-    Lambda (k, Lambda (kf, App (Var k, Lambda (x, cps e))))
+    lam [k; kf; gf] (App (Var k, Lambda (x, cps e)))
   | App (u, v) ->
     let val_u = Ident.create "v" in
     let val_v = Ident.create "v" in
-    Lambda (k,
-      Lambda (kf, 
-        cont (cps u) (Lambda (val_u,
-          cont (cps v) (Lambda (val_v,
-            cont (App (Var val_u, Var val_v)) (Var k) (Var kf))) (Var kf))) (Var kf)))
-
-  (* | Perform e -> *)
-  (*   let val_e = Ident.create "e" in *)
-  (*   Lambda (k, *)
-  (*     Lambda (kf, *)
-  (*       cont (cps e) (Lambda (val_e, *)
-  (*         App (App (Var kf, Var val_e), Var k))) (Var kf))) *)
-  (* | Handle (e, hf) -> *)
-  (*   let val_hf = Ident.create "hf" in *)
-  (*   let x = Ident.create "x" in *)
-  (*   Lambda (k, *)
-  (*     Lambda (kf, *)
-  (*       cont (cps hf) (Lambda (val_hf, *)
-  (*         cont ( *)
-  (*           cps ( *)
-  (*             cont (cps e) (Lambda (x, Var x)) (Var val_hf) *)
-  (*           )) (Var k) (Var kf))) (Var kf))) *)
+    lam [k; kf; gf] (
+      cont (cps u)
+        (lam [val_u]
+           (cont (cps v)
+              (lam [val_v]
+                 (cont (App (Var val_u, Var val_v)) (Var k)))
+              (Var kf) (Var gf))
+           (Var kf) (Var gf))
+        (Var kf) (Var gf)
+    )
 
   | Perform e ->
-    let gf = Ident.create "γf" in
     let val_e = Ident.create "e" in
     let f = Ident.create "f" in
     let v = Ident.create "v" in
@@ -190,11 +178,11 @@ let rec cps e =
       cont (cps e)
         (lam [val_e]
            (app (Var kf) [
-              Var val_e;
-              (lam [f; v; k'; kf'; gf']
-                 (App (cont (cps (App (Var f, Var v))) (Var k) (Var kf),
-                       Var gf)))
-            ]))
+             Var val_e;
+             (lam [f; v; k'; kf'; gf']
+                (App (cont (cps (App (Var f, Var v))) (Var k) (Var kf),
+                      Var gf)))
+           ]))
         (Var kf)
     )
 
@@ -217,7 +205,6 @@ let rec cps e =
              lam [x; kk] (App (cont (cps hf) (Var k') (Var kf'), (Var gf'))))
       ) in
 
-    let gf = Ident.create "γf" in
     lam [k; kf; gf] (
       cont (cps (Lambda (dummy, body))) (lam [vbody] (
         app stack [Var vbody; unit; Var k; Var kf; Var gf]
