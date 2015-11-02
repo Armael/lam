@@ -218,7 +218,8 @@ let rec cps e =
 
     (* lam [k; kf; gf] ( *)
     (*   cont (cps (Lambda (dummy, body))) (lam [vbody] ( *)
-    (*     app stack [Var vbody; unit; Var k; Var kf; Var gf] *)
+    (*     app stack [Var vbody; Var k; Var kf; Var gf; *)
+    (*                unit; Var k; Var kf; Var gf] *)
     (*   )) (Var kf) (Var gf) *)
     (* ) *)
 
