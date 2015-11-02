@@ -106,7 +106,7 @@ let print_t cout =
   in
   aux false
 
-(* CPS transform *******)
+(******************)
 
 let rec subst map e =
   match e with
@@ -142,9 +142,9 @@ let rec cps e =
     Lambda (k, Lambda (kf, App (Var k, e)))
   | Prim (n, p) ->
     let p' =
-      Prim (n + 2, fun l ->
+      Prim (n + 3, fun l ->
         match List.rev l with
-        | _ :: (Closure (_, k)) :: args ->
+        | _ :: _ :: (Closure (_, k)) :: args ->
           App (k, p (List.rev args))
         | _ -> assert false)
     in
@@ -161,27 +161,69 @@ let rec cps e =
           cont (cps v) (Lambda (val_v,
             cont (App (Var val_u, Var val_v)) (Var k) (Var kf))) (Var kf))) (Var kf)))
 
+  (* | Perform e -> *)
+  (*   let val_e = Ident.create "e" in *)
+  (*   Lambda (k, *)
+  (*     Lambda (kf, *)
+  (*       cont (cps e) (Lambda (val_e, *)
+  (*         App (App (Var kf, Var val_e), Var k))) (Var kf))) *)
+  (* | Handle (e, hf) -> *)
+  (*   let val_hf = Ident.create "hf" in *)
+  (*   let x = Ident.create "x" in *)
+  (*   Lambda (k, *)
+  (*     Lambda (kf, *)
+  (*       cont (cps hf) (Lambda (val_hf, *)
+  (*         cont ( *)
+  (*           cps ( *)
+  (*             cont (cps e) (Lambda (x, Var x)) (Var val_hf) *)
+  (*           )) (Var k) (Var kf))) (Var kf))) *)
+
   | Perform e ->
+    let gf = Ident.create "γf" in
     let val_e = Ident.create "e" in
-    lam [k; kf] (
+    let f = Ident.create "f" in
+    let v = Ident.create "v" in
+    let k' = Ident.create "k'" in
+    let kf' = Ident.create "kf'" in
+    let gf' = Ident.create "γf'" in
+    lam [k; kf; gf] (
       cont (cps e)
         (lam [val_e]
-           (App (App (Var kf, Var val_e), Var k))
-        ) (Var kf)
+           (app (Var kf) [
+              Var val_e;
+              (lam [f; v; k'; kf'; gf']
+                 (App (cont (cps (App (Var f, Var v))) (Var k) (Var kf),
+                       Var gf)))
+            ]))
+        (Var kf)
     )
 
-  | Handle (e, hf) ->
-    let val_hf = Ident.create "hf" in
+  | Handle (body, hf) ->
+    let dummy = Ident.create "_" in
+    let vbody = Ident.create "body" in
+    let f = Ident.create "f" in
+    let v = Ident.create "v" in
+    let k' = Ident.create "k'" in
+    let kf' = Ident.create "kf'" in
+    let gf' = Ident.create "γf'" in
     let x = Ident.create "x" in
-    lam [k; kf] (
-      cont (cps hf)
-        (lam [val_hf]
-           (cont
-              (cps (cont (cps e) (Lambda (x, Var x)) (Var val_hf)))
-              (Var k) (Var kf))
-        ) (Var kf)
-    )
+    let g' = Ident.create "γ'" in
+    let kk = Ident.create "kk" in
+    let stack =
+      lam [f; v; k'; kf'; gf'] (
+        App (cont (cps (App (Var f, Var v)))
+               (lam [x] (Var x))
+               (lam [x; kk; g'] (app (Var g') [Var x; Var kk])),
+             lam [x; kk] (App (cont (cps hf) (Var k') (Var kf'), (Var gf'))))
+      ) in
 
+    let gf = Ident.create "γf" in
+    lam [k; kf; gf] (
+      cont (cps (Lambda (dummy, body))) (lam [vbody] (
+        app stack [Var vbody; unit; Var k; Var kf; Var gf]
+      )) (Var kf)
+    )
+                                
 let unhandled_effect =
   Prim
     (1, function
@@ -192,7 +234,10 @@ let unhandled_effect =
 let cps_main e =
   let x = Ident.create "x" in
   let kv = Ident.create "kv" in
-  app (cps e) [lam [x] (Var x);
+  let g = Ident.create "γ" in
+  app (cps e) [lam [x; g] (app (Var g) [Var x]);
+               lam [x] (Var x);
+               lam [x; kv; g] (app (Var g) [Var x; Var kv]);
                lam [x; kv] (App (unhandled_effect, Var x))]
 
 (* Interpreter *)
