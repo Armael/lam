@@ -48,63 +48,70 @@ let int x = Atom (Int x)
 let string s = Atom (String s)
 let unit = Atom Unit
 
-let print_atom cout = function
-  | Unit -> output_string cout "()"
-  | Int i -> Printf.fprintf cout "%d" i
-  | String s -> output_string cout s
+let print_atom ppf = function
+  | Unit -> Format.fprintf ppf "()"
+  | Int i -> Format.fprintf ppf "%d" i
+  | String s -> Format.fprintf ppf "%s" s
 
 let print =
   Prim
     (1, function
        | [Closure (_, Atom a)] ->
-         Printf.printf "%a" print_atom a; Atom Unit
+         Format.printf "%a" print_atom a; Atom Unit
        | _ -> raise (Invalid_argument "print"))
 
 let printl =
   Prim
     (1, function
        | [Closure (_, Atom a)] ->
-         Printf.printf "%a\n%!" print_atom a; Atom Unit
+         Format.printf "%a\n%!" print_atom a; Atom Unit
        | _ -> raise (Invalid_argument "printl"))
 
-let print_t cout =
-  let rec aux paren = function
-    | Var x -> output_string cout x
+let print_t ppf =
+  let open Format in
+  let rec aux paren ppf = function
+    | Var x -> fprintf ppf "%s" x
     | Lambda (x, e) ->
-      if paren then output_string cout "(";
-      aux_lambda [x] e;
-      if paren then output_string cout ")"
+      fprintf ppf "@[<2>%s%a%s@]"
+        (if paren then "(" else "")
+        (aux_lambda [x]) e
+        (if paren then ")" else "")
+
     | App (u, v) ->
-      if paren then output_string cout "(";
-      aux_app [v] u;
-      if paren then output_string cout ")"
-    | Atom a -> print_atom cout a
-    | Prim (n, _) -> Printf.fprintf cout "<prim %d>" n
+      fprintf ppf "@[<2>%s%a%s@]"
+        (if paren then "(" else "")
+        (aux_app [v]) u
+        (if paren then ")" else "")
+
+    | Atom a -> print_atom ppf a
+    | Prim (n, _) -> Format.fprintf ppf "<prim %d>" n
     | Perform e ->
-      if paren then output_string cout "(";
-      output_string cout "perform "; aux false e;
-      if paren then output_string cout ")"
+      fprintf ppf "@[<2>%sperform@ %a%s@]"
+        (if paren then "(" else "")
+        (aux false) e
+        (if paren then ")" else "")
+
     | Handle (e, h) ->
-      if paren then output_string cout "(";
-      output_string cout "handle "; aux false e;
-      output_string cout " with "; aux false h;
-      if paren then output_string cout ")"
+      fprintf ppf "@[<2>%shandle@ %a@ with@ %a%s@]"
+        (if paren then "(" else "")
+        (aux false) e (aux false) h
+        (if paren then ")" else "")
 
-  and aux_lambda idents = function
-    | Lambda (i, e) -> aux_lambda (i :: idents) e
+  and aux_lambda idents ppf = function
+    | Lambda (i, e) -> aux_lambda (i :: idents) ppf e
     | e ->
-      output_string cout "λ";
-      List.iter (fun id -> Printf.fprintf cout " %s" id) (List.rev idents);
-      output_string cout ". ";
-      aux false e
+      fprintf ppf "λ";
+      List.iter (fun id -> fprintf ppf "@ %s" id) (List.rev idents);
+      fprintf ppf ".@ %a" (aux false) e
 
-  and aux_app args = function
-    | App (u, v) -> aux_app (v :: args) u
+  and aux_app args ppf = function
+    | App (u, v) -> aux_app (v :: args) ppf u
     | e ->
-      aux true e;
-      List.iter (fun arg -> output_string cout " "; aux true arg) args
+      fprintf ppf "%a"
+        (aux true) e;
+      List.iter (fun arg -> fprintf ppf "@ %a" (aux true) arg) args
   in
-  aux false
+  aux false ppf
 
 (******************)
 
@@ -215,7 +222,7 @@ let unhandled_effect =
   Prim
     (1, function
        | [Closure (_, e)] ->
-         Printf.printf "Unhandled effect: %a\n%!" print_t e; Atom Unit
+         Format.printf "Unhandled effect: %a\n%!" print_t e; Atom Unit
        | _ -> raise (Invalid_argument "unhandled_effect"))
 
 let cps_main e =
@@ -253,15 +260,15 @@ and apply (Closure (envu, u)) (Closure (envv, v) as cv) =
     else
       Closure (envu, Prim (n - 1, fun l -> p (cv :: l)))
   | _ ->
-    Printf.eprintf "DEBUG: %a\n" print_t u;
+    Format.eprintf "DEBUG: %a\n" print_t u;
     failwith "trying to apply a value that is not a function"
 
 (** *)
 
 let ev t =
-  Printf.printf "%a\n" print_t t;
+  Format.printf "%a\n" print_t t;
   let Closure (_, res) = eval Ident.Map.empty t in
-  Printf.printf "\n>> %a\n%!" print_t res
+  Format.printf "\n>> %a\n%!" print_t res
 
 let ex0 =
   let x = Ident.create "x" in
