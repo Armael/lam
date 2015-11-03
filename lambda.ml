@@ -1,3 +1,7 @@
+(* We have concrete identifiers. 
+
+   Ident.Map.t is used e.g. for the environment of the interpreter.
+*)
 module Ident = struct
   type t = string
 
@@ -12,6 +16,15 @@ module Ident = struct
     end)
 end
 
+(* Our lambda calculus, which is standard lambda-calculus, plus:
+
+   - atoms
+   - primitives, which are basically OCaml functions along with their
+     arity (in order to know when to only collect the arguments and
+     where to apply the function)
+   - effects primitives: perform, handle and continue
+*)
+  
 type atom =
 | Unit
 | Int of int
@@ -27,46 +40,46 @@ and t =
 | Handle of t * t
 | Continue of t * t
 
+(* A runtime value: a closure of a term with its environment.
+   
+   This is defined now because primitives take runtime values as
+   arguments.
+*)
 and value = Closure of value Ident.Map.t * t
 
-(* Helpers ********)
+(* Helpers ********************************************************************)
 
-let lam idents body =
+(* Lambda and App constructors are the simplest possible. To define
+   lambdas with multiple identifiers at the same time, or application
+   with multiple arguments, use the [lam] and [app] helpers.
+*)
+
+let lam (idents: Ident.t list) (body: t): t =
   List.fold_right (fun id acc -> Lambda (id, acc)) idents body
 
-let app f args =
+let app (f: t) (args: t list): t =
   let hd, args = (List.hd args), (List.tl args) in
   List.fold_left (fun acc arg -> App (acc, arg)) (App (f, hd)) args
 
-let rec seq = function
+let rec seq : t list -> t = function
   | [] -> Atom Unit
   | [e] -> e
   | e :: es ->
     let dummy = Ident.create "_" in
     App (Lambda (dummy, seq es), e)
 
-let int x = Atom (Int x)
-let string s = Atom (String s)
-let unit = Atom Unit
+(* Helpers for building atomic terms. *)
+
+let int (x: int): t = Atom (Int x)
+let string (s: string): t = Atom (String s)
+let unit : t = Atom Unit
+
+(* Printers. *)
 
 let print_atom ppf = function
   | Unit -> Format.fprintf ppf "()"
   | Int i -> Format.fprintf ppf "%d" i
   | String s -> Format.fprintf ppf "%s" s
-
-let print =
-  Prim
-    (1, function
-       | [Closure (_, Atom a)] ->
-         Format.printf "%a" print_atom a; Atom Unit
-       | _ -> raise (Invalid_argument "print"))
-
-let printl =
-  Prim
-    (1, function
-       | [Closure (_, Atom a)] ->
-         Format.printf "%a\n%!" print_atom a; Atom Unit
-       | _ -> raise (Invalid_argument "printl"))
 
 let print_t ppf =
   let open Format in
@@ -114,8 +127,26 @@ let print_t ppf =
   in
   aux false ppf
 
-(******************)
+(* Printing primitives. *)
 
+let print =
+  Prim
+    (1, function
+       | [Closure (_, t)] ->
+         Format.printf "%a" print_t t; Atom Unit
+       | _ -> raise (Invalid_argument "print"))
+
+let printl =
+  Prim
+    (1, function
+       | [Closure (_, t)] ->
+         Format.printf "%a\n%!" print_t t; Atom Unit
+       | _ -> raise (Invalid_argument "printl"))
+
+(* CPS transform **************************************************************)
+
+(* Variable substitution. Only used to perform administrative
+   reductions. *)
 let rec subst map e =
   match e with
   | Var x -> (try Ident.Map.find x map with Not_found -> e)
@@ -127,13 +158,21 @@ let rec cps e =
   let k = Ident.create "k" in
   let kf = Ident.create "kf" in
   let gf = Ident.create "γf" in
+
+  (* [cont e c cf gf] "continues" term [e] with continuations [c],
+     [cf], [gf].
+     
+     It is semantically equivalent to [app e [c; cf; cg]], but can
+     perform some administrative reductions.
+  *)
   let cont e c cf gf =
     let is_value = function
       | Var _ | Atom _ | Prim _ -> true
       | _ -> false in
 
     match e with
-    | Lambda (k, Lambda (kf, Lambda (gf, App (Var k', e')))) when k = k' && is_value e' ->
+    | Lambda (k, Lambda (kf, Lambda (gf, App (Var k', e'))))
+        when k = k' && is_value e' ->
       begin match c with
         | Var k ->
           App (Var k, e')
@@ -154,6 +193,7 @@ let rec cps e =
       Prim (n + 3, fun l ->
         match List.rev l with
         | _ :: _ :: (Closure (_, k)) :: args ->
+          (* Ignore the effect continuation & meta-continuation. *)
           App (k, p (List.rev args))
         | _ -> assert false)
     in
@@ -255,6 +295,8 @@ let unhandled_effect =
          Format.printf "Unhandled effect: %a\n%!" print_t e; Atom Unit
        | _ -> raise (Invalid_argument "unhandled_effect"))
 
+(* CPS transformation for a toplevel term: CPS transforms it, and
+   applies it to "identity" continuations. *)
 let cps_main e =
   let x = Ident.create "x" in
   let kv = Ident.create "kv" in
@@ -263,7 +305,7 @@ let cps_main e =
                lam [x; kv; g] (app (Var g) [Var x; Var kv]);
                lam [x; kv] (App (unhandled_effect, Var x))]
 
-(* Interpreter *)
+(* Interpreter ****************************************************************)
 
 let rec eval env = function
   | Var v ->
@@ -278,7 +320,7 @@ let rec eval env = function
     Closure (env, e)
   | App (u, v) ->
     apply (eval env u) (eval env v)
-  | _ -> failwith "not handled"
+  | _ -> failwith "not handled by the interpreter"
 
 and apply (Closure (envu, u)) (Closure (envv, v) as cv) =
   match u with
@@ -292,8 +334,9 @@ and apply (Closure (envu, u)) (Closure (envv, v) as cv) =
     Format.eprintf "DEBUG: %a\n" print_t u;
     failwith "trying to apply a value that is not a function"
 
-(** *)
+(* Examples *******************************************************************)
 
+(* Prints a term, evaluates it, and prints the result. *)
 let ev t =
   Format.printf "%a\n" print_t t;
   let Closure (_, res) = eval Ident.Map.empty t in
@@ -315,7 +358,9 @@ let ex1_2 =
   app (lam [x] (Var x)) [app (lam [x] (Var x)) [int 3]]
 
 let ex2 =
-  (seq [App (printl, int 3); App (printl, string "abc"); App (printl, string "def")])
+  seq [App (printl, int 3);
+       App (printl, string "abc");
+       App (printl, string "def")]
 
 let ex3 =
   let e = Ident.create "my_e" in
