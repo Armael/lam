@@ -108,8 +108,9 @@ let print_t ppf =
     | Prim (f, args) ->
       fprintf ppf "@[<2>%s<prim>%a%s@]"
         (if paren then "(" else "")
-        (fun ppf _ -> List.iter (fun arg -> fprintf ppf "@ %a" (aux false) arg)
-            args) ()
+        (fun ppf _ ->
+           List.iter (fun arg -> fprintf ppf "@ %a" (aux false) arg) args)
+        ()
         (if paren then ")" else "")
 
     | Perform e ->
@@ -196,7 +197,8 @@ let rec cps e =
       | _ -> false in
 
     match e with
-    | Lambda (k, Lambda (kf, Lambda (g, Lambda (gf, App (App (Var k', e'), Var g')))))
+    | Lambda (k, Lambda (kf, Lambda (g, Lambda (gf, App (App (Var k', e'),
+                                                         Var g')))))
         when k = k' && g = g' && is_value e' ->
       begin match c with
         | Var k ->
@@ -328,7 +330,8 @@ let rec cps e =
         (lam [val_e; g]
            (cont (cps (Lambda (x, Var x)))
               (lam [f; g]
-                 (app stack [Var f; Var val_e; Var k; Var kf; Var g; Var gf]))
+                 (app stack [Var f; Var val_e;
+                             Var k; Var kf; Var g; Var gf]))
               (Var kf) (Var g) (Var gf)))
         (Var kf) (Var g) (Var gf)
     )
@@ -351,7 +354,8 @@ let unhandled_effect e k =
     | [e; k] ->
       Format.printf "Unhandled effect: %a\n%!" print_t e;
       Format.printf "cont: %a\n%!" print_t k;
-      Format.printf "bound in cont env:"; Ident.Map.iter (fun v _ -> Format.printf " %s" v) env;
+      Format.printf "bound in cont env:";
+      Ident.Map.iter (fun v _ -> Format.printf " %s" v) env;
       Format.printf "\n%!";
       env, unit
     | _ -> raise (Invalid_argument "unhandled_effect") in
@@ -372,8 +376,9 @@ let cps_main e =
 
 let rec eval env = function
   | Var v ->
-    (try Ident.Map.find v env with
-       Not_found -> Printf.printf "DEBUG: %s\n%!" v; failwith "Unbound identifier")
+    (try Ident.Map.find v env with Not_found ->
+       Printf.printf "DEBUG: %s\n%!" v;
+       failwith "Unbound identifier")
   | Lambda (_, _)
   | Atom _ as e ->
     Closure (env, e)
