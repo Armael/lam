@@ -110,6 +110,11 @@ let print_t ppf =
         (if paren then "(" else "")
         (aux false) e (aux false) h
         (if paren then ")" else "")
+    | Continue (e, k) ->
+      fprintf ppf "@[<2>%scontinue @ %a@ %a%s@]"
+        (if paren then "(" else "")
+        (aux false) e (aux false) k
+        (if paren then ")" else "")
 
   and aux_lambda idents ppf = function
     | Lambda (i, e) -> aux_lambda (i :: idents) ppf e
