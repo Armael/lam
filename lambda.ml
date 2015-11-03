@@ -22,7 +22,7 @@ end
    - primitives, which are basically OCaml functions along with their
      arity (in order to know when to only collect the arguments and
      where to apply the function)
-   - effects primitives: perform, handle and continue
+   - effects primitives: perform, handle, continue and delegate
 *)
   
 type atom =
@@ -39,6 +39,7 @@ and t =
 | Perform of t
 | Handle of t * t
 | Continue of t * t
+| Delegate of t * t
 
 (* A runtime value: a closure of a term with its environment.
    
@@ -110,8 +111,13 @@ let print_t ppf =
         (if paren then "(" else "")
         (aux false) e (aux false) h
         (if paren then ")" else "")
-    | Continue (e, k) ->
+    | Continue (k, e) ->
       fprintf ppf "@[<2>%scontinue @ %a@ %a%s@]"
+        (if paren then "(" else "")
+        (aux false) k (aux false) e
+        (if paren then ")" else "")
+    | Delegate (e, k) ->
+      fprintf ppf "@[<2>%sdelegate @ %a@ %a%s@]"
         (if paren then "(" else "")
         (aux false) e (aux false) k
         (if paren then ")" else "")
@@ -293,6 +299,19 @@ let rec cps e =
         (Var kf) (Var gf)
     )
 
+  | Delegate (e, stack) ->
+    let val_e = Ident.create "ve" in
+    lam [k; kf; gf] (
+      cont (cps e)
+        (lam [val_e]
+           (app (Var kf) [
+               Var val_e;
+               stack;
+               Var gf
+             ]))
+        (Var kf) (Var gf)
+    )
+
 let unhandled_effect =
   Prim
     (1, function
@@ -374,3 +393,16 @@ let ex3 =
                App (printl, Perform (int 0));
                App (printl, string "def")],
           Lambda (e, Lambda (k, Continue (Var k, int 18))))
+
+let ex4 =
+  let e = Ident.create "my_e" in
+  let k = Ident.create "my_k" in
+  Handle (
+    Handle (
+      seq [App (printl, string "abc");
+           App (printl, Perform (int 0));
+           App (printl, string "def")],
+      lam [e; k] (Delegate (Var e, Var k))
+    ),
+    lam [e; k] (Continue (Var k, int 18))
+  )
