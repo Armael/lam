@@ -35,18 +35,21 @@ and t =
 | Lambda of Ident.t * t
 | App of t * t
 | Atom of atom
-| Prim of int * (value list -> t)
+| Prim of (env -> t list -> env * t) * t list
 | Perform of t
-| Handle of t * t
+| Handle of handler
 | Continue of t * t
 | Delegate of t * t
+
+and handler = { body: t; hv: t; hf: t }
 
 (* A runtime value: a closure of a term with its environment.
    
    This is defined now because primitives take runtime values as
    arguments.
 *)
-and value = Closure of value Ident.Map.t * t
+and value = Closure of env * t
+and env = value Ident.Map.t
 
 (* Helpers ********************************************************************)
 
@@ -68,6 +71,9 @@ let rec seq : t list -> t = function
   | e :: es ->
     let dummy = Ident.create "_" in
     App (Lambda (dummy, seq es), e)
+
+let letin (x: Ident.t) (e1: t) (e2: t): t =
+  App (Lambda (x, e2), e1)
 
 (* Helpers for building atomic terms. *)
 
@@ -99,17 +105,23 @@ let print_t ppf =
         (if paren then ")" else "")
 
     | Atom a -> print_atom ppf a
-    | Prim (n, _) -> Format.fprintf ppf "<prim %d>" n
+    | Prim (f, args) ->
+      fprintf ppf "@[<2>%s<prim>%a%s@]"
+        (if paren then "(" else "")
+        (fun ppf _ -> List.iter (fun arg -> fprintf ppf "@ %a" (aux false) arg)
+            args) ()
+        (if paren then ")" else "")
+
     | Perform e ->
       fprintf ppf "@[<2>%sperform@ %a%s@]"
         (if paren then "(" else "")
         (aux false) e
         (if paren then ")" else "")
 
-    | Handle (e, h) ->
-      fprintf ppf "@[<2>%shandle@ %a@ with@ %a%s@]"
+    | Handle {body; hv; hf} ->
+      fprintf ppf "@[<2>%shandle@ %a@ ->@ %a@ with@ %a%s@]"
         (if paren then "(" else "")
-        (aux false) e (aux false) h
+        (aux false) body (aux false) hv (aux false) hf
         (if paren then ")" else "")
     | Continue (k, e) ->
       fprintf ppf "@[<2>%scontinue @ %a@ %a%s@]"
@@ -140,19 +152,19 @@ let print_t ppf =
 
 (* Printing primitives. *)
 
-let print =
-  Prim
-    (1, function
-       | [Closure (_, t)] ->
-         Format.printf "%a" print_t t; Atom Unit
-       | _ -> raise (Invalid_argument "print"))
-
-let printl =
-  Prim
-    (1, function
-       | [Closure (_, t)] ->
-         Format.printf "%a\n%!" print_t t; Atom Unit
-       | _ -> raise (Invalid_argument "printl"))
+let print t =
+  let f env = function
+    | [t] ->
+      Format.printf "%a" print_t t; (env, unit)
+    | _ -> raise (Invalid_argument "print") in
+  Prim (f, [t])
+    
+let printl t =
+  let f env = function
+  | [t] ->
+    Format.printf "%a\n%!" print_t t; (env, unit)
+  | _ -> raise (Invalid_argument "printl") in
+  Prim (f, [t])
 
 (* CPS transform **************************************************************)
 
@@ -163,11 +175,13 @@ let rec subst map e =
   | Var x -> (try Ident.Map.find x map with Not_found -> e)
   | Lambda (x, e) -> Lambda (x, subst map e)
   | App (u, v) -> App (subst map u, subst map v)
+  | Prim (f, args) -> Prim (f, List.map (subst map) args)
   | _ -> e
 
 let rec cps e =
   let k = Ident.create "k" in
   let kf = Ident.create "kf" in
+  let g = Ident.create "γ" in
   let gf = Ident.create "γf" in
 
   (* [cont e c cf gf] "continues" term [e] with continuations [c],
@@ -176,54 +190,60 @@ let rec cps e =
      It is semantically equivalent to [app e [c; cf; cg]], but can
      perform some administrative reductions.
   *)
-  let cont e c cf gf =
+  let cont e c cf mc mcf =
     let is_value = function
       | Var _ | Atom _ | Prim _ -> true
       | _ -> false in
 
     match e with
-    | Lambda (k, Lambda (kf, Lambda (gf, App (Var k', e'))))
-        when k = k' && is_value e' ->
+    | Lambda (k, Lambda (kf, Lambda (g, Lambda (gf, App (App (Var k', e'), Var g')))))
+        when k = k' && g = g' && is_value e' ->
       begin match c with
         | Var k ->
-          App (Var k, e')
-        | Lambda (kx, kbody) ->
-          subst Ident.Map.(add kx e' empty) kbody
+          app (Var k) [e'; mc]
+        | Lambda (kx, Lambda (kg, kbody)) ->
+          begin match mc with
+          | Var _ ->
+            subst Ident.Map.(add kx e' @@ add kg mc @@ empty) kbody
+          | _ ->
+            (* Do not substitute [mc] if it's not a variable. *)
+            app c [e; mc]
+          end
         | _ -> raise (Invalid_argument "cont")
       end
 
     | _ ->
-      app e [c; cf; gf]
+      app e [c; cf; mc; mcf]
   in
 
   match e with
   | Var _ | Atom _ ->
-    lam [k; kf; gf] (App (Var k, e))
-  | Prim (n, p) ->
-    let p' =
-      Prim (n + 3, fun l ->
-        match List.rev l with
-        | _ :: _ :: (Closure (_, k)) :: args ->
-          (* Ignore the effect continuation & meta-continuation. *)
-          App (k, p (List.rev args))
-        | _ -> assert false)
-    in
-    lam [k; kf; gf] (App (Var k, p'))
+    lam [k; kf; g; gf] (app (Var k) [e; Var g])
+
+  | Prim (f, args) ->
+    let args_idents = List.map (fun _ -> Ident.create "v") args in
+    lam [k; kf; g; gf] (
+      List.fold_right (fun (arg, id) e ->
+        cont (cps arg) (lam [id; g] e) (Var kf) (Var g) (Var gf)
+      ) (List.combine args args_idents)
+        (app (Var k) [Prim (f, List.map (fun v -> Var v) args_idents); Var g])
+    )
 
   | Lambda (x, e) ->
-    lam [k; kf; gf] (App (Var k, Lambda (x, cps e)))
+    lam [k; kf; g; gf] (app (Var k) [Lambda (x, cps e); Var g])
+
   | App (u, v) ->
     let val_u = Ident.create "v" in
     let val_v = Ident.create "v" in
-    lam [k; kf; gf] (
+    lam [k; kf; g; gf] (
       (cont (cps u)
-         (lam [val_u]
+         (lam [val_u; g]
             (cont (cps v)
-               (lam [val_v]
+               (lam [val_v; g]
                   (cont (App (Var val_u, Var val_v))
-                     (Var k) (Var kf) (Var gf)))
-               (Var kf) (Var gf)))
-         (Var kf) (Var gf))
+                     (Var k) (Var kf) (Var g) (Var gf)))
+               (Var kf) (Var g) (Var gf)))
+         (Var kf) (Var g) (Var gf))
     )
 
   | Perform e ->
@@ -231,23 +251,29 @@ let rec cps e =
     let f = Ident.create "f" in
     let v = Ident.create "v" in
     let k' = Ident.create "k'" in
+    let g' = Ident.create "γ'" in
     let kf' = Ident.create "kf'" in
     let gf' = Ident.create "γf'" in
-    lam [k; kf; gf] (
+    let x = Ident.create "x" in
+    lam [k; kf; g; gf] (
       cont (cps e)
-        (lam [val_e]
+        (lam [val_e; g]
            (app (Var kf) [
              Var val_e;
-             (lam [f; v; k'; kf'; gf']
-                (cont (cps (App (Var f, Var v))) (Var k) (Var kf) (Var gf)));
+             (lam [f; v; k'; kf'; g'; gf']
+                (cont (cps (App (Var f, Var v)))
+                   (Var k) (Var kf)
+                   (lam [x] (app (Var k') [Var x; Var g']))
+                   (Var gf)));
              Var gf
            ]))
-        (Var kf) (Var gf)
+        (Var kf) (Var g) (Var gf)
     )
 
-  | Handle (body, hf) ->
+  | Handle {body; hv; hf} ->
     (* let dummy = Ident.create "_" in *)
     (* let vbody = Ident.create "body" in *)
+    let hv_var = Ident.create "hv" in
     let hf_var = Ident.create "hf" in
     (* let f = Ident.create "f" in *)
     (* let v = Ident.create "v" in *)
@@ -275,49 +301,61 @@ let rec cps e =
     (* ) *)
 
     (* Inlined version of what is commented before: *)
-    lam [k; kf; gf]
+    lam [k; kf; g; gf]
       (cont (cps body)
-         (lam [x] (Var x))
+         (lam [x; g'] (cont (cps hv)
+                         (lam [hv_var; g']
+                            (app (Var hv_var)
+                               [Var x;
+                                lam [x; g'] (App (Var g', Var x));
+                                Var kf; Var g'; Var gf]))
+                         (Var kf) (Var g') (Var gf)))
          (lam [x; kk; g'] (app (Var g') [Var x; Var kk]))
+         (Var g)
          (lam [x; kk] (cont (cps hf)
-                         (lam [hf_var] (app (Var hf_var)
-                                          [Var x; Var k; Var kf; Var gf;
-                                           Var kk; Var k; Var kf; Var gf]))
-                         (Var kf) (Var gf))))
+                         (lam [hf_var; g]
+                            (app (Var hf_var)
+                               [Var x; Var k; Var kf; Var g; Var gf;
+                                Var kk; Var k; Var kf; Var g; Var gf]))
+                         (Var kf) (Var g) (Var gf))))
 
   | Continue (stack, e) ->
     let val_e = Ident.create "ve" in
     let x = Ident.create "x" in
     let f = Ident.create "f" in
-    lam [k; kf; gf] (
+    lam [k; kf; g; gf] (
       cont (cps e)
-        (lam [val_e]
+        (lam [val_e; g]
            (cont (cps (Lambda (x, Var x)))
-              (lam [f]
-                 (app stack [Var f; Var val_e; Var k; Var kf; Var gf]))
-              (Var kf) (Var gf)))
-        (Var kf) (Var gf)
+              (lam [f; g]
+                 (app stack [Var f; Var val_e; Var k; Var kf; Var g; Var gf]))
+              (Var kf) (Var g) (Var gf)))
+        (Var kf) (Var g) (Var gf)
     )
 
   | Delegate (e, stack) ->
     let val_e = Ident.create "ve" in
-    lam [k; kf; gf] (
+    lam [k; kf; g; gf] (
       cont (cps e)
-        (lam [val_e]
+        (lam [val_e; g]
            (app (Var kf) [
                Var val_e;
                stack;
                Var gf
              ]))
-        (Var kf) (Var gf)
+        (Var kf) (Var g) (Var gf)
     )
 
-let unhandled_effect =
-  Prim
-    (1, function
-       | [Closure (_, e)] ->
-         Format.printf "Unhandled effect: %a\n%!" print_t e; Atom Unit
-       | _ -> raise (Invalid_argument "unhandled_effect"))
+let unhandled_effect e k =
+  let f env = function
+    | [e; k] ->
+      Format.printf "Unhandled effect: %a\n%!" print_t e;
+      Format.printf "cont: %a\n%!" print_t k;
+      Format.printf "bound in cont env:"; Ident.Map.iter (fun v _ -> Format.printf " %s" v) env;
+      Format.printf "\n%!";
+      env, unit
+    | _ -> raise (Invalid_argument "unhandled_effect") in
+  Prim (f, [e; k])
 
 (* CPS transformation for a toplevel term: CPS transforms it, and
    applies it to "identity" continuations. *)
@@ -325,23 +363,27 @@ let cps_main e =
   let x = Ident.create "x" in
   let kv = Ident.create "kv" in
   let g = Ident.create "γ" in
-  app (cps e) [lam [x] (Var x);
+  app (cps e) [lam [x; g] (app (Var g) [Var x]);
                lam [x; kv; g] (app (Var g) [Var x; Var kv]);
-               lam [x; kv] (App (unhandled_effect, Var x))]
+               lam [x] (Var x);
+               lam [x; kv] (unhandled_effect (Var x) (Var kv))]
 
 (* Interpreter ****************************************************************)
 
 let rec eval env = function
   | Var v ->
     (try Ident.Map.find v env with
-       Not_found -> failwith "Unbound identifier")
+       Not_found -> Printf.printf "DEBUG: %s\n%!" v; failwith "Unbound identifier")
   | Lambda (_, _)
   | Atom _ as e ->
     Closure (env, e)
-  | Prim (0, p) -> eval env (p [])
-  | Prim (n, _) as e ->
-    if n < 0 then failwith "Invalid primitive arity";
-    Closure (env, e)
+  | Prim (f, args) ->
+    let env, args_values_r = List.fold_left (fun (env, args_values_r) arg ->
+      let Closure (env, arg_val) = eval env arg in
+      (env, arg_val :: args_values_r)
+    ) (env, []) args in
+    let env, ret = f env (List.rev args_values_r) in
+    eval env ret
   | App (u, v) ->
     apply (eval env u) (eval env v)
   | _ -> failwith "not handled by the interpreter"
@@ -349,11 +391,6 @@ let rec eval env = function
 and apply (Closure (envu, u)) (Closure (envv, v) as cv) =
   match u with
   | Lambda (x, e) -> eval (Ident.Map.add x cv envu) e
-  | Prim (n, p) when n > 0 ->
-    if n = 1 then
-      eval envu (p [cv])
-    else
-      Closure (envu, Prim (n - 1, fun l -> p (cv :: l)))
   | _ ->
     Format.eprintf "DEBUG: %a\n" print_t u;
     failwith "trying to apply a value that is not a function"
@@ -362,9 +399,18 @@ and apply (Closure (envu, u)) (Closure (envv, v) as cv) =
 
 (* Prints a term, evaluates it, and prints the result. *)
 let ev t =
-  Format.printf "%a\n" print_t t;
+  (* Format.printf "%a\n" print_t t; *)
   let Closure (_, res) = eval Ident.Map.empty t in
   Format.printf "\n>> %a\n%!" print_t res
+
+let rec check_scope env = function
+  | Var v -> (try Ident.Map.find v env; [] with Not_found -> [Var v])
+  | Lambda (x, e) -> check_scope (Ident.Map.add x () env) e
+  | App (e1, e2) ->
+    (check_scope env e1) @ (check_scope env e2)
+  | Atom _ -> []
+  | Prim (_,_) -> []
+  | _ -> failwith "not handled"
 
 let ex0 =
   let x = Ident.create "x" in
@@ -372,37 +418,69 @@ let ex0 =
 
 let ex1 =
   let x = Ident.create "x" in
-  (app printl [app (lam [x] (Var x)) [Atom (Int 3)]])
+  printl (app (lam [x] (Var x)) [Atom (Int 3)])
 
 let ex1_1 =
-  seq [App (printl, string "a"); App (printl, string "b")]
+  seq [printl (string "a"); printl (string "b")]
 
 let ex1_2 =
   let x = Ident.create "x" in
   app (lam [x] (Var x)) [app (lam [x] (Var x)) [int 3]]
 
 let ex2 =
-  seq [App (printl, int 3);
-       App (printl, string "abc");
-       App (printl, string "def")]
+  seq [printl (int 3);
+       printl (string "abc");
+       printl (string "def")]
 
 let ex3 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  Handle (seq [App (printl, string "abc");
-               App (printl, Perform (int 0));
-               App (printl, string "def")],
-          Lambda (e, Lambda (k, Continue (Var k, int 18))))
+  let v = Ident.create "my_v" in
+  Handle {
+    body = seq [printl (string "abc");
+                printl (Perform (int 0));
+                printl (string "def")];
+    hv = Lambda (v, Var v);
+    hf = lam [e; k] (Continue (Var k, int 18))
+  }
+
+let ex3_1 =
+  let e = Ident.create "my_e" in
+  let k = Ident.create "my_k" in
+  let v = Ident.create "my_v" in
+  Handle {
+    body = Perform (int 0);
+    hv = Lambda (v, Var v);
+    hf = lam [e; k] (Continue (Var k, int 18))
+  }
+  
 
 let ex4 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  Handle (
-    Handle (
-      seq [App (printl, string "abc");
-           App (printl, Perform (int 0));
-           App (printl, string "def")],
-      lam [e; k] (Delegate (Var e, Var k))
-    ),
-    lam [e; k] (Continue (Var k, int 18))
-  )
+  let v = Ident.create "my_v" in
+  Handle {
+    body =
+      Handle {
+        body = seq [printl (string "abc");
+                    printl (Perform (int 0));
+                    printl (string "def")];
+        hv = Lambda (v, Var v);
+        hf = lam [e; k] (Delegate (Var e, Var k))
+      };
+    hv = Lambda (v, Var v);
+    hf = lam [e; k] (Continue (Var k, int 18))
+  }
+
+let ex5 =
+  let e = Ident.create "my_e" in
+  let k = Ident.create "my_k" in
+  let v = Ident.create "my_v" in
+  Handle {
+    body = seq [printl (string "abc");
+                printl (Perform (int 0));
+                printl (string "def")];
+    hv = Lambda (v, Var v);
+    hf = lam [e; k] (seq [Continue (Var k, int 18);
+                          printl (string "handler end")])
+  }
