@@ -282,7 +282,7 @@ let rec cps e =
                          (lam [x; g'] (App (Var g', Var x)))
                          (Var kf) (Var g') (Var gf)))
          (lam [x; kk; g'] (app (Var g') [Var x; Var kk]))
-         (Var g)
+         (lam [x] (app (Var k) [Var x; Var g]))
          (lam [ve; vk] (cont (cps hf) (Var k) (Var kf) (Var g) (Var gf))))
 
   | Continue (stack, e) ->
@@ -453,3 +453,16 @@ let ex5 =
     hf = e, k, seq [Continue (Var k, int 18);
                     printl (string "handler end")]
   }
+
+let ex6 =
+  let e = Ident.create "my_e" in
+  let k = Ident.create "my_k" in
+  let v = Ident.create "my_v" in
+  seq [
+    Handle {
+      body = unit;
+      hv = v, Var v;
+      hf = e, k, unit;
+    };
+    printl (string "abc")
+  ]
