@@ -41,7 +41,7 @@ and t =
 | Continue of t * t
 | Delegate of t * t
 
-and handler = { body: t; hv: t; hf: t }
+and handler = { body: t; hv: Ident.t * t; hf: Ident.t * Ident.t * t }
 
 (* A runtime value: a closure of a term with its environment.
    
@@ -119,10 +119,10 @@ let print_t ppf =
         (aux false) e
         (if paren then ")" else "")
 
-    | Handle {body; hv; hf} ->
-      fprintf ppf "@[<2>%shandle@ %a@ ->@ %a@ with@ %a%s@]"
+    | Handle {body; hv = (v, hv); hf = (e, k, hf)} ->
+      fprintf ppf "@[<2>%shandle@ %a@ with@ %s@ ->@ %a@ |@ effect@ %s@ %s@ ->@ %a%s@]"
         (if paren then "(" else "")
-        (aux false) body (aux false) hv (aux false) hf
+        (aux false) body v (aux false) hv e k (aux false) hf
         (if paren then ")" else "")
     | Continue (k, e) ->
       fprintf ppf "@[<2>%scontinue @ %a@ %a%s@]"
@@ -272,54 +272,18 @@ let rec cps e =
         (Var kf) (Var g) (Var gf)
     )
 
-  | Handle {body; hv; hf} ->
-    (* let dummy = Ident.create "_" in *)
-    (* let vbody = Ident.create "body" in *)
-    let hv_var = Ident.create "hv" in
-    let hf_var = Ident.create "hf" in
-    (* let f = Ident.create "f" in *)
-    (* let v = Ident.create "v" in *)
-    (* let k' = Ident.create "k'" in *)
-    (* let kf' = Ident.create "kf'" in *)
-    (* let gf' = Ident.create "γf'" in *)
+  | Handle {body; hv = (v, hv); hf = (ve, vk, hf)} ->
     let x = Ident.create "x" in
     let g' = Ident.create "γ'" in
     let kk = Ident.create "kk" in
-    (* let stack = *)
-    (*   lam [f; v; k'; kf'; gf'] ( *)
-    (*     cont (cps (App (Var f, Var v))) *)
-    (*       (lam [x] (Var x)) *)
-    (*       (lam [x; kk; g'] (app (Var g') [Var x; Var kk])) *)
-    (*       (lam [x; kk] (cont (cps hf) *)
-    (*                       (lam [hf_var] (app (Var hf_var) [Var x; Var kk; Var k'; Var kf'; Var gf'])) *)
-    (*                       (Var kf') (Var gf'))) *)
-    (*   ) in *)
-
-    (* lam [k; kf; gf] ( *)
-    (*   cont (cps (Lambda (dummy, body))) (lam [vbody] ( *)
-    (*     app stack [Var vbody; Var k; Var kf; Var gf; *)
-    (*                unit; Var k; Var kf; Var gf] *)
-    (*   )) (Var kf) (Var gf) *)
-    (* ) *)
-
-    (* Inlined version of what is commented before: *)
     lam [k; kf; g; gf]
       (cont (cps body)
-         (lam [x; g'] (cont (cps hv)
-                         (lam [hv_var; g']
-                            (app (Var hv_var)
-                               [Var x;
-                                lam [x; g'] (App (Var g', Var x));
-                                Var kf; Var g'; Var gf]))
+         (lam [v; g'] (cont (cps hv)
+                         (lam [x; g'] (App (Var g', Var x)))
                          (Var kf) (Var g') (Var gf)))
          (lam [x; kk; g'] (app (Var g') [Var x; Var kk]))
          (Var g)
-         (lam [x; kk] (cont (cps hf)
-                         (lam [hf_var; g]
-                            (app (Var hf_var)
-                               [Var x; Var k; Var kf; Var g; Var gf;
-                                Var kk; Var k; Var kf; Var g; Var gf]))
-                         (Var kf) (Var g) (Var gf))))
+         (lam [ve; vk] (cont (cps hf) (Var k) (Var kf) (Var g) (Var gf))))
 
   | Continue (stack, e) ->
     let val_e = Ident.create "ve" in
@@ -445,8 +409,8 @@ let ex3 =
     body = seq [printl (string "abc");
                 printl (Perform (int 0));
                 printl (string "def")];
-    hv = Lambda (v, Var v);
-    hf = lam [e; k] (Continue (Var k, int 18))
+    hv = v, Var v;
+    hf = e, k, Continue (Var k, int 18)
   }
 
 let ex3_1 =
@@ -455,8 +419,8 @@ let ex3_1 =
   let v = Ident.create "my_v" in
   Handle {
     body = Perform (int 0);
-    hv = Lambda (v, Var v);
-    hf = lam [e; k] (Continue (Var k, int 18))
+    hv = v, Var v;
+    hf = e, k, Continue (Var k, int 18)
   }
   
 
@@ -470,11 +434,11 @@ let ex4 =
         body = seq [printl (string "abc");
                     printl (Perform (int 0));
                     printl (string "def")];
-        hv = Lambda (v, Var v);
-        hf = lam [e; k] (Delegate (Var e, Var k))
+        hv = v, Var v;
+        hf = e, k, Delegate (Var e, Var k)
       };
-    hv = Lambda (v, Var v);
-    hf = lam [e; k] (Continue (Var k, int 18))
+    hv = v, Var v;
+    hf = e, k, Continue (Var k, int 18)
   }
 
 let ex5 =
@@ -485,7 +449,7 @@ let ex5 =
     body = seq [printl (string "abc");
                 printl (Perform (int 0));
                 printl (string "def")];
-    hv = Lambda (v, Var v);
-    hf = lam [e; k] (seq [Continue (Var k, int 18);
-                          printl (string "handler end")])
+    hv = v, Var v;
+    hf = e, k, seq [Continue (Var k, int 18);
+                    printl (string "handler end")]
   }
