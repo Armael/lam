@@ -190,7 +190,7 @@ let rec cps e =
      It is semantically equivalent to [app e [c; cf; g]], but can
      perform some administrative reductions.
   *)
-  let cont e c cf mc =
+  let cont e ?metacont c cf =
     let is_value = function
       | Var _ | Atom _ | Prim _ -> true
       | _ -> false in
@@ -200,50 +200,62 @@ let rec cps e =
         when k = k' && g = g' && is_value e' ->
       begin match c with
         | Var k ->
-          app (Var k) [e'; mc]
+          begin match metacont with
+            | Some mc ->
+              app (Var k) [e'; mc]
+            | None ->
+              app (Var k) [e']
+          end
         | Lambda (kx, Lambda (kg, kbody)) ->
-          begin match mc with
-          | Var _ ->
+          begin match metacont with
+          | Some (Var _ as mc) ->
             subst Ident.Map.(add kx e' @@ add kg mc @@ empty) kbody
-          | _ ->
+          | Some mc ->
             (* Do not substitute [mc] if it's not a variable. *)
             app c [e; mc]
+          | None ->
+            app c [e]
           end
         | _ -> raise (Invalid_argument "cont")
       end
 
     | _ ->
-      app e [c; cf; mc]
+      begin match metacont with
+        | Some mc ->
+          app e [c; cf; mc]
+        | None ->
+          app e [c; cf]
+      end
   in
 
   match e with
   | Var _ | Atom _ ->
-    lam [k; kf; g] (app (Var k) [e; Var g])
+    lam [k; kf] (App (Var k, e))
 
   | Prim (f, args) ->
     let args_idents = List.map (fun _ -> Ident.create "v") args in
-    lam [k; kf; g] (
+    lam [k; kf] (
       List.fold_right (fun (arg, id) e ->
-        cont (cps arg) (lam [id; g] e) (Var kf) (Var g)
+        cont (cps arg) (Lambda (id, e)) (Var kf)
       ) (List.combine args args_idents)
-        (app (Var k) [Prim (f, List.map (fun v -> Var v) args_idents); Var g])
+        (App (Var k, Prim (f, List.map (fun v -> Var v) args_idents)))
     )
 
   | Lambda (x, e) ->
-    lam [k; kf; g] (app (Var k) [Lambda (x, cps e); Var g])
+    lam [k; kf] (App (Var k, Lambda (x, cps e)))
 
   | App (u, v) ->
     let val_u = Ident.create "v" in
     let val_v = Ident.create "v" in
-    lam [k; kf; g] (
+    lam [k; kf] (
       (cont (cps u)
-         (lam [val_u; g]
+         (lam [val_u]
             (cont (cps v)
-               (lam [val_v; g]
+               (lam [val_v]
                   (cont (App (Var val_u, Var val_v))
-                     (Var k) (Var kf) (Var g)))
-               (Var kf) (Var g)))
-         (Var kf) (Var g))
+                     (Var k) (Var kf)))
+               (Var kf)))
+         (Var kf))
     )
 
   | Perform e ->
@@ -262,10 +274,10 @@ let rec cps e =
              (lam [f; v; k'; kf'; g']
                 (cont (cps (App (Var f, Var v)))
                    (Var k) (Var kf)
-                   (lam [x] (app (Var k') [Var x; Var g']))));
+                   ~metacont:(lam [x] (app (Var k') [Var x; Var g']))));
              Var g
            ]))
-        (Var kf) (Var g)
+        (Var kf) ~metacont:(Var g)
     )
 
   | Handle {body; hv = (v, hv); hf = (ve, vk, hf)} ->
@@ -275,10 +287,10 @@ let rec cps e =
       (cont (cps body)
          (lam [v; g'] (cont (cps hv)
                          (lam [x; g'] (App (Var g', Var x)))
-                         (Var kf) (Var g')))
+                         (Var kf) ~metacont:(Var g')))
          (lam [ve; vk; g'] (cont (cps hf) (lam [x; g'] (App (Var g', Var x)))
-                              (Var kf) (Var g')))
-         (lam [x] (app (Var k) [Var x; Var g])))
+                              (Var kf) ~metacont:(Var g')))
+         ~metacont:(lam [x] (app (Var k) [Var x; Var g])))
 
    | Continue (stack, e) ->
     let val_e = Ident.create "ve" in
@@ -291,8 +303,8 @@ let rec cps e =
               (lam [f; g]
                  (app stack [Var f; Var val_e;
                              Var k; Var kf; Var g]))
-              (Var kf) (Var g)))
-        (Var kf) (Var g)
+              (Var kf) ~metacont:(Var g)))
+        (Var kf) ~metacont:(Var g)
     )
 
   | Delegate (e, stack) ->
@@ -305,7 +317,7 @@ let rec cps e =
                stack;
                Var g
              ]))
-        (Var kf) (Var g)
+        (Var kf) ~metacont:(Var g)
     )
 
 let unhandled_effect e k =
