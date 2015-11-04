@@ -183,22 +183,20 @@ let rec cps e =
   let k = Ident.create "k" in
   let kf = Ident.create "kf" in
   let g = Ident.create "γ" in
-  let gf = Ident.create "γf" in
 
-  (* [cont e c cf gf] "continues" term [e] with continuations [c],
-     [cf], [gf].
+  (* [cont e c cf g] "continues" term [e] with continuations [c],
+     [cf], [g].
      
-     It is semantically equivalent to [app e [c; cf; cg]], but can
+     It is semantically equivalent to [app e [c; cf; g]], but can
      perform some administrative reductions.
   *)
-  let cont e c cf mc mcf =
+  let cont e c cf mc =
     let is_value = function
       | Var _ | Atom _ | Prim _ -> true
       | _ -> false in
 
     match e with
-    | Lambda (k, Lambda (kf, Lambda (g, Lambda (gf, App (App (Var k', e'),
-                                                         Var g')))))
+    | Lambda (k, Lambda (kf, Lambda (g, App (App (Var k', e'), Var g'))))
         when k = k' && g = g' && is_value e' ->
       begin match c with
         | Var k ->
@@ -215,37 +213,37 @@ let rec cps e =
       end
 
     | _ ->
-      app e [c; cf; mc; mcf]
+      app e [c; cf; mc]
   in
 
   match e with
   | Var _ | Atom _ ->
-    lam [k; kf; g; gf] (app (Var k) [e; Var g])
+    lam [k; kf; g] (app (Var k) [e; Var g])
 
   | Prim (f, args) ->
     let args_idents = List.map (fun _ -> Ident.create "v") args in
-    lam [k; kf; g; gf] (
+    lam [k; kf; g] (
       List.fold_right (fun (arg, id) e ->
-        cont (cps arg) (lam [id; g] e) (Var kf) (Var g) (Var gf)
+        cont (cps arg) (lam [id; g] e) (Var kf) (Var g)
       ) (List.combine args args_idents)
         (app (Var k) [Prim (f, List.map (fun v -> Var v) args_idents); Var g])
     )
 
   | Lambda (x, e) ->
-    lam [k; kf; g; gf] (app (Var k) [Lambda (x, cps e); Var g])
+    lam [k; kf; g] (app (Var k) [Lambda (x, cps e); Var g])
 
   | App (u, v) ->
     let val_u = Ident.create "v" in
     let val_v = Ident.create "v" in
-    lam [k; kf; g; gf] (
+    lam [k; kf; g] (
       (cont (cps u)
          (lam [val_u; g]
             (cont (cps v)
                (lam [val_v; g]
                   (cont (App (Var val_u, Var val_v))
-                     (Var k) (Var kf) (Var g) (Var gf)))
-               (Var kf) (Var g) (Var gf)))
-         (Var kf) (Var g) (Var gf))
+                     (Var k) (Var kf) (Var g)))
+               (Var kf) (Var g)))
+         (Var kf) (Var g))
     )
 
   | Perform e ->
@@ -255,62 +253,59 @@ let rec cps e =
     let k' = Ident.create "k'" in
     let g' = Ident.create "γ'" in
     let kf' = Ident.create "kf'" in
-    let gf' = Ident.create "γf'" in
     let x = Ident.create "x" in
-    lam [k; kf; g; gf] (
+    lam [k; kf; g] (
       cont (cps e)
         (lam [val_e; g]
            (app (Var kf) [
              Var val_e;
-             (lam [f; v; k'; kf'; g'; gf']
+             (lam [f; v; k'; kf'; g']
                 (cont (cps (App (Var f, Var v)))
                    (Var k) (Var kf)
-                   (lam [x] (app (Var k') [Var x; Var g']))
-                   (Var gf)));
-             Var gf
+                   (lam [x] (app (Var k') [Var x; Var g']))));
+             Var g
            ]))
-        (Var kf) (Var g) (Var gf)
+        (Var kf) (Var g)
     )
 
   | Handle {body; hv = (v, hv); hf = (ve, vk, hf)} ->
     let x = Ident.create "x" in
     let g' = Ident.create "γ'" in
-    let kk = Ident.create "kk" in
-    lam [k; kf; g; gf]
+    lam [k; kf; g]
       (cont (cps body)
          (lam [v; g'] (cont (cps hv)
                          (lam [x; g'] (App (Var g', Var x)))
-                         (Var kf) (Var g') (Var gf)))
-         (lam [x; kk; g'] (app (Var g') [Var x; Var kk]))
-         (lam [x] (app (Var k) [Var x; Var g]))
-         (lam [ve; vk] (cont (cps hf) (Var k) (Var kf) (Var g) (Var gf))))
+                         (Var kf) (Var g')))
+         (lam [ve; vk; g'] (cont (cps hf) (lam [x; g'] (App (Var g', Var x)))
+                              (Var kf) (Var g')))
+         (lam [x] (app (Var k) [Var x; Var g])))
 
-  | Continue (stack, e) ->
+   | Continue (stack, e) ->
     let val_e = Ident.create "ve" in
     let x = Ident.create "x" in
     let f = Ident.create "f" in
-    lam [k; kf; g; gf] (
+    lam [k; kf; g] (
       cont (cps e)
         (lam [val_e; g]
            (cont (cps (Lambda (x, Var x)))
               (lam [f; g]
                  (app stack [Var f; Var val_e;
-                             Var k; Var kf; Var g; Var gf]))
-              (Var kf) (Var g) (Var gf)))
-        (Var kf) (Var g) (Var gf)
+                             Var k; Var kf; Var g]))
+              (Var kf) (Var g)))
+        (Var kf) (Var g)
     )
 
   | Delegate (e, stack) ->
     let val_e = Ident.create "ve" in
-    lam [k; kf; g; gf] (
+    lam [k; kf; g] (
       cont (cps e)
         (lam [val_e; g]
            (app (Var kf) [
                Var val_e;
                stack;
-               Var gf
+               Var g
              ]))
-        (Var kf) (Var g) (Var gf)
+        (Var kf) (Var g)
     )
 
 let unhandled_effect e k =
@@ -332,9 +327,8 @@ let cps_main e =
   let kv = Ident.create "kv" in
   let g = Ident.create "γ" in
   app (cps e) [lam [x; g] (app (Var g) [Var x]);
-               lam [x; kv; g] (app (Var g) [Var x; Var kv]);
-               lam [x] (Var x);
-               lam [x; kv] (unhandled_effect (Var x) (Var kv))]
+               lam [x; kv; g] (unhandled_effect (Var x) (Var kv));
+               lam [x] (Var x)]
 
 (* Interpreter ****************************************************************)
 
@@ -466,3 +460,17 @@ let ex6 =
     };
     printl (string "abc")
   ]
+
+let ex7 =
+  let e = Ident.create "my_e" in
+  let k = Ident.create "my_k" in
+  let v = Ident.create "my_v" in
+  Handle {
+    body = seq [Perform unit; Perform unit];
+    hv = v, seq [printl (string "hv"); Var v];
+    hf = e, k, seq [
+        printl (string "hf1");
+        Continue (Var k, unit);
+        printl (string "hf2")
+      ]
+  }
