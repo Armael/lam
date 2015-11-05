@@ -13,6 +13,16 @@
       (λx. k x γ)
 ```
 
+Sugar-free version:
+```
+⟦handle body (v ↦ eᵥ) (vₑ vₖ ↦ e_f)⟧ =
+  λk k_f γ.
+    ⟦body⟧
+      (λv.     ⟦eᵥ⟧  (λx γ'. γ' x) k_f)
+      (λvₑ vₖ. ⟦e_f⟧ (λx γ'. γ' x) k_f)
+      (λx. k x γ)
+```
+
 #### perform
 
 ![perform](/img/perform.jpg)
@@ -27,6 +37,15 @@
     ) k_f γ
 ```
 
+Sugar-free version:
+```
+⟦perform e⟧ =
+  λk k_f.
+    ⟦e⟧ (λvₑ.
+      k_f vₑ (λf v k' k_f' γ'. ⟦f v⟧ k k_f (λx. k' x γ'))
+    ) k_f
+```
+
 #### continue
 
 ```
@@ -39,6 +58,17 @@
     ) k_f γ
 ```
 
+Sugar-free version:
+```
+⟦continue stack x⟧ =
+  λk k_f.
+    ⟦x⟧ (λv.
+      ⟦λx. x⟧ (λf.
+        stack f v k k_f
+      ) k_f
+    ) k_f
+```
+
 #### delegate
 
 ```
@@ -47,4 +77,13 @@
     ⟦e⟧ (λvₑ γ.
       k_f vₑ stack γ
     ) k_f γ
+```
+
+Sugar-free version:
+```
+⟦delegate e stack⟧ =
+  λk k_f.
+    ⟦e⟧ (λvₑ.
+      k_f vₑ stack
+    ) k_f
 ```
