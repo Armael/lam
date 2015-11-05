@@ -40,8 +40,12 @@ and t =
   | Handle of handler
   | Continue of t * t
   | Delegate of t * t
+  | Raise of t
 
-and handler = { body: t; hv: Ident.t * t; hf: Ident.t * Ident.t * t }
+and handler = { body: t;
+                hv: Ident.t * t;
+                hx: Ident.t * t;
+                hf: Ident.t * Ident.t * t }
 
 (* A runtime value: a closure of a term with its environment.
 
@@ -134,6 +138,11 @@ let print_t ppf =
         (if paren then "(" else "")
         (aux false) e (aux false) k
         (if paren then ")" else "")
+    | Raise e ->
+      fprintf ppf "@[<2>%sraise@ %a%s@]"
+        (if paren then "(" else "")
+        (aux false) e
+        (if paren then ")" else "")
 
   and aux_lambda idents ppf = function
     | Lambda (i, e) -> aux_lambda (i :: idents) ppf e
@@ -181,22 +190,24 @@ let rec subst map e =
 
 let rec cps e =
   let k = Ident.create "k" in
+  let kx = Ident.create "kx" in
   let kf = Ident.create "kf" in
   let g = Ident.create "γ" in
 
-  (* [cont e c cf g] "continues" term [e] with continuations [c],
-     [cf], [g].
+  (* [cont e c cx cf ~metacont:g] "continues" term [e] with
+     continuations [c], [cx], [cf], and optionally meta-continuation
+     [g].
 
-     It is semantically equivalent to [app e [c; cf; g]], but can
+     It is semantically equivalent to [app e [c; cx; cf; g]], but can
      perform some administrative reductions.
   *)
-  let cont e ?metacont c cf =
+  let cont e ?metacont c cx cf =
     let is_value = function
       | Var _ | Atom _ | Prim _ -> true
       | _ -> false in
 
     match e with
-    | Lambda (k, Lambda (kf, Lambda (g, App (App (Var k', e'), Var g'))))
+    | Lambda (k, Lambda (kx, Lambda (kf, Lambda (g, App (App (Var k', e'), Var g')))))
       when k = k' && g = g' && is_value e' ->
       begin match c with
         | Var k ->
@@ -222,40 +233,40 @@ let rec cps e =
     | _ ->
       begin match metacont with
         | Some mc ->
-          app e [c; cf; mc]
+          app e [c; cx; cf; mc]
         | None ->
-          app e [c; cf]
+          app e [c; cx; cf]
       end
   in
 
   match e with
   | Var _ | Atom _ ->
-    lam [k; kf] (App (Var k, e))
+    lam [k; kx; kf] (App (Var k, e))
 
   | Prim (f, args) ->
     let args_idents = List.map (fun _ -> Ident.create "v") args in
-    lam [k; kf] (
+    lam [k; kx; kf] (
       List.fold_right (fun (arg, id) e ->
-          cont (cps arg) (Lambda (id, e)) (Var kf)
+          cont (cps arg) (Lambda (id, e)) (Var kx) (Var kf)
         ) (List.combine args args_idents)
         (App (Var k, Prim (f, List.map (fun v -> Var v) args_idents)))
     )
 
   | Lambda (x, e) ->
-    lam [k; kf] (App (Var k, Lambda (x, cps e)))
+    lam [k; kx; kf] (App (Var k, Lambda (x, cps e)))
 
   | App (u, v) ->
     let val_u = Ident.create "v" in
     let val_v = Ident.create "v" in
-    lam [k; kf] (
+    lam [k; kx; kf] (
       (cont (cps u)
          (lam [val_u]
             (cont (cps v)
                (lam [val_v]
                   (cont (App (Var val_u, Var val_v))
-                     (Var k) (Var kf)))
-               (Var kf)))
-         (Var kf))
+                     (Var k) (Var kx) (Var kf)))
+               (Var kx) (Var kf)))
+         (Var kx) (Var kf))
     )
 
   | Perform e ->
@@ -263,33 +274,36 @@ let rec cps e =
     let f = Ident.create "f" in
     let v = Ident.create "v" in
     let k' = Ident.create "k'" in
+    let kx' = Ident.create "kx'" in
     let g' = Ident.create "γ'" in
     let kf' = Ident.create "kf'" in
     let x = Ident.create "x" in
-    lam [k; kf; g] (
+    lam [k; kx; kf; g] (
       cont (cps e)
         (lam [val_e; g]
            (app (Var kf) [
                Var val_e;
-               (lam [f; v; k'; kf'; g']
+               (lam [f; v; k'; kx'; kf'; g']
                   (cont (cps (App (Var f, Var v)))
-                     (Var k) (Var kf)
+                     (Var k) (Var kx) (Var kf)
                      ~metacont:(lam [x] (app (Var k') [Var x; Var g']))));
                Var g
              ]))
-        (Var kf) ~metacont:(Var g)
+        (Var kx) (Var kf) ~metacont:(Var g)
     )
 
-  | Handle {body; hv = (v, hv); hf = (ve, vk, hf)} ->
+  | Handle {body; hv = (v, hv); hx = (vx, hx); hf = (ve, vk, hf)} ->
     let x = Ident.create "x" in
     let g' = Ident.create "γ'" in
-    lam [k; kf; g]
+    lam [k; kx; kf; g]
       (cont (cps body)
          (lam [v; g'] (cont (cps hv)
                          (lam [x; g'] (App (Var g', Var x)))
-                         (Var kf) ~metacont:(Var g')))
+                         (Var kx) (Var kf) ~metacont:(Var g')))
+         (lam [vx; g'] (cont (cps hx) (lam [x; g'] (App (Var g', Var x)))
+                          (Var kx) (Var kf) ~metacont:(Var g')))
          (lam [ve; vk; g'] (cont (cps hf) (lam [x; g'] (App (Var g', Var x)))
-                              (Var kf) ~metacont:(Var g')))
+                              (Var kx) (Var kf) ~metacont:(Var g')))
          ~metacont:(lam [x] (app (Var k) [Var x; Var g])))
 
   | Continue (stack, e) ->
@@ -297,7 +311,7 @@ let rec cps e =
     let x = Ident.create "x" in
     let f = Ident.create "f" in
     let val_stack = Ident.create "stack" in
-    lam [k; kf; g] (
+    lam [k; kx; kf; g] (
       cont (cps e)
         (lam [val_e; g]
            (cont (cps stack)
@@ -305,15 +319,15 @@ let rec cps e =
                  (cont (cps (Lambda (x, Var x)))
                     (lam [f; g]
                        (app (Var val_stack) [Var f; Var val_e;
-                                             Var k; Var kf; Var g]))
-                    (Var kf) ~metacont:(Var g)))
-              (Var kf) ~metacont:(Var g)))
-        (Var kf) ~metacont:(Var g)
+                                             Var k; Var kx; Var kf; Var g]))
+                    (Var kx) (Var kf) ~metacont:(Var g)))
+              (Var kx) (Var kf) ~metacont:(Var g)))
+        (Var kx) (Var kf) ~metacont:(Var g)
     )
 
   | Delegate (e, stack) ->
     let val_e = Ident.create "ve" in
-    lam [k; kf; g] (
+    lam [k; kx; kf; g] (
       cont (cps e)
         (lam [val_e; g]
            (app (Var kf) [
@@ -321,8 +335,17 @@ let rec cps e =
                stack;
                Var g
              ]))
-        (Var kf) ~metacont:(Var g)
+        (Var kx) (Var kf) ~metacont:(Var g)
     )
+
+  | Raise e ->
+    let val_e = Ident.create "ve" in
+    lam [k; kx; kf] (
+      cont (cps e) (
+        Lambda (val_e, App (Var kx, Var val_e))
+      ) (Var kx) (Var kf)
+    )
+
 
 let unhandled_effect e k =
   let f env = function
@@ -336,6 +359,14 @@ let unhandled_effect e k =
     | _ -> raise (Invalid_argument "unhandled_effect") in
   Prim (f, [e; k])
 
+let unhandled_exn e =
+  let f env = function
+    | [e] ->
+      Format.printf "Unhandled exception: %a\n%!" print_t e;
+      env, unit
+    | _ -> raise (Invalid_argument "unhandled_exn") in
+  Prim (f, [e])
+
 (* CPS transformation for a toplevel term: CPS transforms it, and
    applies it to "identity" continuations. *)
 let cps_main e =
@@ -343,6 +374,7 @@ let cps_main e =
   let kv = Ident.create "kv" in
   let g = Ident.create "γ" in
   app (cps e) [lam [x; g] (app (Var g) [Var x]);
+               lam [x] (unhandled_exn (Var x));
                lam [x; kv; g] (unhandled_effect (Var x) (Var kv));
                lam [x] (Var x)]
 
@@ -391,6 +423,26 @@ let rec check_scope env = function
   | Prim (_,_) -> []
   | _ -> failwith "not handled"
 
+(* default handlers *)
+
+let identity =
+  let v = Ident.create "v" in
+  v, Var v
+
+let reraise =
+  let vx = Ident.create "vx" in
+  let f env = function
+    | [e] -> env, Raise e
+    | _ -> raise (Invalid_argument "reraise") in
+  vx, Prim (f, [Var vx])
+
+let delegate =
+  let ve = Ident.create "ve" in
+  let vk = Ident.create "vk" in
+  ve, vk, Delegate (Var ve, Var vk)
+
+(*****)
+
 let ex0 =
   let x = Ident.create "x" in
   app (lam [x] (Var x)) [int 3]
@@ -414,22 +466,22 @@ let ex2 =
 let ex3 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  let v = Ident.create "my_v" in
   Handle {
     body = seq [printl (string "abc");
                 printl (Perform (int 0));
                 printl (string "def")];
-    hv = v, Var v;
+    hv = identity;
+    hx = reraise;
     hf = e, k, Continue (Var k, int 18)
   }
 
 let ex3_1 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  let v = Ident.create "my_v" in
   Handle {
     body = Perform (int 0);
-    hv = v, Var v;
+    hv = identity;
+    hx = reraise;
     hf = e, k, Continue (Var k, int 18)
   }
 
@@ -437,42 +489,41 @@ let ex3_1 =
 let ex4 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  let v = Ident.create "my_v" in
   Handle {
     body =
       Handle {
         body = seq [printl (string "abc");
                     printl (Perform (int 0));
                     printl (string "def")];
-        hv = v, Var v;
-        hf = e, k, Delegate (Var e, Var k)
+        hv = identity;
+        hx = reraise;
+        hf = delegate;
       };
-    hv = v, Var v;
+    hv = identity;
+    hx = reraise;
     hf = e, k, Continue (Var k, int 18)
   }
 
 let ex5 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  let v = Ident.create "my_v" in
   Handle {
     body = seq [printl (string "abc");
                 printl (Perform (int 0));
                 printl (string "def")];
-    hv = v, Var v;
+    hv = identity;
+    hx = reraise;
     hf = e, k, seq [Continue (Var k, int 18);
                     printl (string "handler end")]
   }
 
 let ex6 =
-  let e = Ident.create "my_e" in
-  let k = Ident.create "my_k" in
-  let v = Ident.create "my_v" in
   seq [
     Handle {
       body = unit;
-      hv = v, Var v;
-      hf = e, k, unit;
+      hv = identity;
+      hx = reraise;
+      hf = delegate;
     };
     printl (string "abc")
   ]
@@ -484,6 +535,7 @@ let ex7 =
   Handle {
     body = seq [Perform unit; Perform unit];
     hv = v, seq [printl (string "hv"); Var v];
+    hx = reraise;
     hf = e, k, seq [
         printl (string "hf1");
         Continue (Var k, unit);
@@ -494,12 +546,30 @@ let ex7 =
 let ex8 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  let v = Ident.create "my_v" in
   Handle {
     body = seq [printl (string "a");
                 printl (Perform (int 0));
                 printl (string "b")];
-    hv = v, Var v;
+    hv = identity;
+    hx = reraise;
     hf = e, k, Continue (seq [printl ex3_1; Var k],
                          int 19)
+  }
+
+(* Evaluates to 1 *)
+let ex9 =
+  let e = Ident.create "my_e" in
+  let k = Ident.create "my_k" in
+  let v = Ident.create "my_v" in
+  Handle {
+    body =
+      Handle {
+        body = Perform unit;
+        hv = identity;
+        hx = v, int 0;
+        hf = e, k, Raise unit;
+      };
+    hv = identity;
+    hx = v, int 1;
+    hf = delegate;
   }
