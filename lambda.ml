@@ -296,13 +296,17 @@ let rec cps e =
     let val_e = Ident.create "ve" in
     let x = Ident.create "x" in
     let f = Ident.create "f" in
+    let val_stack = Ident.create "stack" in
     lam [k; kf; g] (
       cont (cps e)
         (lam [val_e; g]
-           (cont (cps (Lambda (x, Var x)))
-              (lam [f; g]
-                 (app stack [Var f; Var val_e;
-                             Var k; Var kf; Var g]))
+           (cont (cps stack)
+              (lam [val_stack; g]
+                 (cont (cps (Lambda (x, Var x)))
+                    (lam [f; g]
+                       (app (Var val_stack) [Var f; Var val_e;
+                                             Var k; Var kf; Var g]))
+                    (Var kf) ~metacont:(Var g)))
               (Var kf) ~metacont:(Var g)))
         (Var kf) ~metacont:(Var g)
     )
@@ -485,4 +489,17 @@ let ex7 =
         Continue (Var k, unit);
         printl (string "hf2")
       ]
+  }
+
+let ex8 =
+  let e = Ident.create "my_e" in
+  let k = Ident.create "my_k" in
+  let v = Ident.create "my_v" in
+  Handle {
+    body = seq [printl (string "a");
+                printl (Perform (int 0));
+                printl (string "b")];
+    hv = v, Var v;
+    hf = e, k, Continue (seq [printl ex3_1; Var k],
+                         int 19)
   }
