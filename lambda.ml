@@ -1,4 +1,4 @@
-(* We have concrete identifiers. 
+(* We have concrete identifiers.
 
    Ident.Map.t is used e.g. for the environment of the interpreter.
 *)
