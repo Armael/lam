@@ -32,7 +32,7 @@ Sugar-free version:
   λk k_f γ.
     ⟦e⟧ (λvₑ γ.
       k_f vₑ
-          (λf v k' k_f' γ'. ⟦f v⟧ k k_f (λx. k' x γ'))
+          (λf v k' k_f' γ'. f v k k_f (λx. k' x γ'))
           γ
     ) k_f γ
 ```
@@ -42,7 +42,7 @@ Sugar-free version:
 ⟦perform e⟧ =
   λk k_f.
     ⟦e⟧ (λvₑ.
-      k_f vₑ (λf v k' k_f' γ'. ⟦f v⟧ k k_f (λx. k' x γ'))
+      k_f vₑ (λf v k' k_f' γ'. f v k k_f (λx. k' x γ'))
     ) k_f
 ```
 
@@ -52,8 +52,10 @@ Sugar-free version:
 ⟦continue stack x⟧ =
   λk k_f γ.
     ⟦x⟧ (λv γ.
-      ⟦λx. x⟧ (λf γ.
-        stack f v k k_f γ
+      ⟦stack⟧ (λstack γ.
+        ⟦λx. x⟧ (λf γ.
+          stack f v k k_f γ
+        ) k_f γ
       ) k_f γ
     ) k_f γ
 ```
@@ -63,8 +65,8 @@ Sugar-free version:
 ⟦continue stack x⟧ =
   λk k_f.
     ⟦x⟧ (λv.
-      ⟦λx. x⟧ (λf.
-        stack f v k k_f
+      ⟦stack⟧ (λstack γ.
+        stack (λx k k_f. k x) v k k_f
       ) k_f
     ) k_f
 ```
@@ -74,8 +76,10 @@ Sugar-free version:
 ```
 ⟦delegate e stack⟧ =
   λk k_f γ.
-    ⟦e⟧ (λvₑ γ.
-      k_f vₑ stack γ
+    ⟦stack⟧ (λstack γ.
+      ⟦e⟧ (λvₑ γ.
+        k_f vₑ stack γ
+      ) k_f γ
     ) k_f γ
 ```
 
@@ -83,7 +87,9 @@ Sugar-free version:
 ```
 ⟦delegate e stack⟧ =
   λk k_f.
-    ⟦e⟧ (λvₑ.
-      k_f vₑ stack
+    ⟦stack⟧ (λstack.
+      ⟦e⟧ (λvₑ.
+        k_f vₑ stack
+      ) k_f
     ) k_f
 ```

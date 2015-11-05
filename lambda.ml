@@ -283,10 +283,9 @@ let rec cps e =
         (lam [val_e]
            (app (Var kf) [
                Var val_e;
-               (lam [f; v; k'; kx'; kf'; g']
-                  (cont (cps (App (Var f, Var v)))
-                     (Var k) (Var kx) (Var kf)
-                     ~metacont:(lam [x] (app (Var k') [Var x; Var g']))))
+               lam [f; v; k'; kx'; kf'; g']
+                 (app (Var f) [Var v; Var k; Var kx; Var kf;
+                               lam [x] (app (Var k') [Var x; Var g'])])
              ]))
         (Var kx) (Var kf)
     )
@@ -308,31 +307,34 @@ let rec cps e =
   | Continue (stack, e) ->
     let val_e = Ident.create "ve" in
     let x = Ident.create "x" in
-    let f = Ident.create "f" in
     let val_stack = Ident.create "stack" in
     lam [k; kx; kf] (
       cont (cps e)
         (lam [val_e]
            (cont (cps stack)
               (lam [val_stack]
-                 (cont (cps (Lambda (x, Var x)))
-                    (lam [f]
-                       (app (Var val_stack) [Var f; Var val_e;
-                                             Var k; Var kx; Var kf]))
-                    (Var kx) (Var kf)))
+                 (app (Var val_stack) [
+                     lam [x; k; kx; kf] (App (Var k, Var x));
+                     Var val_e;
+                     Var k; Var kx; Var kf
+                   ]))
               (Var kx) (Var kf)))
         (Var kx) (Var kf)
     )
 
   | Delegate (e, stack) ->
     let val_e = Ident.create "ve" in
+    let val_stack = Ident.create "stack" in
     lam [k; kx; kf] (
-      cont (cps e)
-        (lam [val_e]
-           (app (Var kf) [
-               Var val_e;
-               stack
-             ]))
+      cont (cps stack)
+        (lam [val_stack]
+           (cont (cps e)
+              (lam [val_e]
+                 (app (Var kf) [
+                     Var val_e;
+                     Var val_stack
+                   ]))
+              (Var kx) (Var kf)))
         (Var kx) (Var kf)
     )
 
