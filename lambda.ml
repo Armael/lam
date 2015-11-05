@@ -205,38 +205,22 @@ let rec cps e =
     let is_value = function
       | Var _ | Atom _ | Prim _ -> true
       | _ -> false in
+    let app_opt x = function None -> x | Some y -> App (x, y) in
 
     match e with
-    | Lambda (k, Lambda (kx, Lambda (kf, Lambda (g, App (App (Var k', e'), Var g')))))
-      when k = k' && g = g' && is_value e' ->
-      begin match c with
-        | Var k ->
-          begin match metacont with
-            | Some mc ->
-              app (Var k) [e'; mc]
-            | None ->
-              app (Var k) [e']
-          end
-        | Lambda (kx, Lambda (kg, kbody)) ->
-          begin match metacont with
-            | Some (Var _ as mc) ->
-              subst Ident.Map.(add kx e' @@ add kg mc @@ empty) kbody
-            | Some mc ->
-              (* Do not substitute [mc] if it's not a variable. *)
-              app c [e; mc]
-            | None ->
-              app c [e]
-          end
+    | Lambda (k, Lambda (kx, Lambda (kf, App (Var k', e'))))
+      when k = k' && is_value e' ->
+      begin match c, metacont with
+        | Var k, _ -> app_opt (App (Var k, e')) metacont
+        | Lambda (x, Lambda (g, body)), Some (Var _ as mc) ->
+          subst Ident.Map.(add x e' @@ add g mc @@ empty) body
+        | Lambda (x, body), _ ->
+          app_opt (subst Ident.Map.(add x e' empty) body) metacont
         | _ -> raise (Invalid_argument "cont")
       end
 
     | _ ->
-      begin match metacont with
-        | Some mc ->
-          app e [c; cx; cf; mc]
-        | None ->
-          app e [c; cx; cf]
-      end
+      app_opt (app e [c; cx; cf]) metacont
   in
 
   match e with
