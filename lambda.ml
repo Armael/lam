@@ -24,27 +24,27 @@ end
      where to apply the function)
    - effects primitives: perform, handle, continue and delegate
 *)
-  
+
 type atom =
-| Unit
-| Int of int
-| String of string
+  | Unit
+  | Int of int
+  | String of string
 
 and t =
-| Var of Ident.t
-| Lambda of Ident.t * t
-| App of t * t
-| Atom of atom
-| Prim of (env -> t list -> env * t) * t list
-| Perform of t
-| Handle of handler
-| Continue of t * t
-| Delegate of t * t
+  | Var of Ident.t
+  | Lambda of Ident.t * t
+  | App of t * t
+  | Atom of atom
+  | Prim of (env -> t list -> env * t) * t list
+  | Perform of t
+  | Handle of handler
+  | Continue of t * t
+  | Delegate of t * t
 
 and handler = { body: t; hv: Ident.t * t; hf: Ident.t * Ident.t * t }
 
 (* A runtime value: a closure of a term with its environment.
-   
+
    This is defined now because primitives take runtime values as
    arguments.
 *)
@@ -159,12 +159,12 @@ let print t =
       Format.printf "%a" print_t t; (env, unit)
     | _ -> raise (Invalid_argument "print") in
   Prim (f, [t])
-    
+
 let printl t =
   let f env = function
-  | [t] ->
-    Format.printf "%a\n%!" print_t t; (env, unit)
-  | _ -> raise (Invalid_argument "printl") in
+    | [t] ->
+      Format.printf "%a\n%!" print_t t; (env, unit)
+    | _ -> raise (Invalid_argument "printl") in
   Prim (f, [t])
 
 (* CPS transform **************************************************************)
@@ -186,7 +186,7 @@ let rec cps e =
 
   (* [cont e c cf g] "continues" term [e] with continuations [c],
      [cf], [g].
-     
+
      It is semantically equivalent to [app e [c; cf; g]], but can
      perform some administrative reductions.
   *)
@@ -197,7 +197,7 @@ let rec cps e =
 
     match e with
     | Lambda (k, Lambda (kf, Lambda (g, App (App (Var k', e'), Var g'))))
-        when k = k' && g = g' && is_value e' ->
+      when k = k' && g = g' && is_value e' ->
       begin match c with
         | Var k ->
           begin match metacont with
@@ -208,13 +208,13 @@ let rec cps e =
           end
         | Lambda (kx, Lambda (kg, kbody)) ->
           begin match metacont with
-          | Some (Var _ as mc) ->
-            subst Ident.Map.(add kx e' @@ add kg mc @@ empty) kbody
-          | Some mc ->
-            (* Do not substitute [mc] if it's not a variable. *)
-            app c [e; mc]
-          | None ->
-            app c [e]
+            | Some (Var _ as mc) ->
+              subst Ident.Map.(add kx e' @@ add kg mc @@ empty) kbody
+            | Some mc ->
+              (* Do not substitute [mc] if it's not a variable. *)
+              app c [e; mc]
+            | None ->
+              app c [e]
           end
         | _ -> raise (Invalid_argument "cont")
       end
@@ -236,8 +236,8 @@ let rec cps e =
     let args_idents = List.map (fun _ -> Ident.create "v") args in
     lam [k; kf] (
       List.fold_right (fun (arg, id) e ->
-        cont (cps arg) (Lambda (id, e)) (Var kf)
-      ) (List.combine args args_idents)
+          cont (cps arg) (Lambda (id, e)) (Var kf)
+        ) (List.combine args args_idents)
         (App (Var k, Prim (f, List.map (fun v -> Var v) args_idents)))
     )
 
@@ -270,13 +270,13 @@ let rec cps e =
       cont (cps e)
         (lam [val_e; g]
            (app (Var kf) [
-             Var val_e;
-             (lam [f; v; k'; kf'; g']
-                (cont (cps (App (Var f, Var v)))
-                   (Var k) (Var kf)
-                   ~metacont:(lam [x] (app (Var k') [Var x; Var g']))));
-             Var g
-           ]))
+               Var val_e;
+               (lam [f; v; k'; kf'; g']
+                  (cont (cps (App (Var f, Var v)))
+                     (Var k) (Var kf)
+                     ~metacont:(lam [x] (app (Var k') [Var x; Var g']))));
+               Var g
+             ]))
         (Var kf) ~metacont:(Var g)
     )
 
@@ -292,7 +292,7 @@ let rec cps e =
                               (Var kf) ~metacont:(Var g')))
          ~metacont:(lam [x] (app (Var k) [Var x; Var g])))
 
-   | Continue (stack, e) ->
+  | Continue (stack, e) ->
     let val_e = Ident.create "ve" in
     let x = Ident.create "x" in
     let f = Ident.create "f" in
@@ -347,16 +347,16 @@ let cps_main e =
 let rec eval env = function
   | Var v ->
     (try Ident.Map.find v env with Not_found ->
-       Printf.printf "DEBUG: %s\n%!" v;
-       failwith "Unbound identifier")
+      Printf.printf "DEBUG: %s\n%!" v;
+      failwith "Unbound identifier")
   | Lambda (_, _)
   | Atom _ as e ->
     Closure (env, e)
   | Prim (f, args) ->
     let env, args_values_r = List.fold_left (fun (env, args_values_r) arg ->
-      let Closure (env, arg_val) = eval env arg in
-      (env, arg_val :: args_values_r)
-    ) (env, []) args in
+        let Closure (env, arg_val) = eval env arg in
+        (env, arg_val :: args_values_r)
+      ) (env, []) args in
     let env, ret = f env (List.rev args_values_r) in
     eval env ret
   | App (u, v) ->
@@ -428,7 +428,7 @@ let ex3_1 =
     hv = v, Var v;
     hf = e, k, Continue (Var k, int 18)
   }
-  
+
 
 let ex4 =
   let e = Ident.create "my_e" in
