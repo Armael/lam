@@ -192,7 +192,6 @@ let rec cps e =
   let k = Ident.create "k" in
   let kx = Ident.create "kx" in
   let kf = Ident.create "kf" in
-  let g = Ident.create "γ" in
 
   (* [cont e c cx cf ~metacont:g] "continues" term [e] with
      continuations [c], [cx], [cf], and optionally meta-continuation
@@ -257,36 +256,26 @@ let rec cps e =
     let val_e = Ident.create "e" in
     let f = Ident.create "f" in
     let v = Ident.create "v" in
-    let k' = Ident.create "k'" in
-    let kx' = Ident.create "kx'" in
-    let g' = Ident.create "γ'" in
-    let kf' = Ident.create "kf'" in
-    let x = Ident.create "x" in
     lam [k; kx; kf] (
       cont (cps e)
         (lam [val_e]
            (app (Var kf) [
                Var val_e;
-               lam [f; v; k'; kx'; kf'; g']
-                 (app (Var f) [Var v; Var k; Var kx; Var kf;
-                               lam [x] (app (Var k') [Var x; Var g'])])
+               lam [f; v]
+                 (app (Var f) [Var v; Var k; Var kx; Var kf])
              ]))
         (Var kx) (Var kf)
     )
 
   | Handle {body; hv = (v, hv); hx = (vx, hx); hf = (ve, vk, hf)} ->
     let x = Ident.create "x" in
-    let g' = Ident.create "γ'" in
-    lam [k; kx; kf; g]
-      (cont (cps body)
-         (lam [v] (cont (cps hv)
-                     (lam [x; g'] (App (Var g', Var x)))
-                     (Var kx) (Var kf)))
-         (lam [vx] (cont (cps hx) (lam [x; g'] (App (Var g', Var x)))
-                      (Var kx) (Var kf)))
-         (lam [ve; vk] (cont (cps hf) (lam [x; g'] (App (Var g', Var x)))
-                          (Var kx) (Var kf)))
-         ~metacont:(lam [x] (app (Var k) [Var x; Var g])))
+    lam [k; kx; kf]
+      (app (Var k) [
+          (cont (cps body)
+             (lam [v] (cont (cps hv) (lam [x] (Var x)) (Var kx) (Var kf)))
+             (lam [vx] (cont (cps hx) (lam [x] (Var x)) (Var kx) (Var kf)))
+             (lam [ve; vk] (cont (cps hf) (lam [x] (Var x)) (Var kx) (Var kf))))
+        ])
 
   | Continue (stack, e) ->
     let val_e = Ident.create "ve" in
@@ -297,11 +286,11 @@ let rec cps e =
         (lam [val_e]
            (cont (cps stack)
               (lam [val_stack]
-                 (app (Var val_stack) [
-                     lam [x; k; kx; kf] (App (Var k, Var x));
-                     Var val_e;
-                     Var k; Var kx; Var kf
-                   ]))
+                 (App (Var k,
+                       (app (Var val_stack) [
+                           lam [x; k; kx; kf] (App (Var k, Var x));
+                           Var val_e
+                         ]))))
               (Var kx) (Var kf)))
         (Var kx) (Var kf)
     )
@@ -356,11 +345,9 @@ let unhandled_exn e =
 let cps_main e =
   let x = Ident.create "x" in
   let kv = Ident.create "kv" in
-  let g = Ident.create "γ" in
-  app (cps e) [lam [x; g] (app (Var g) [Var x]);
+  app (cps e) [lam [x] (Var x);
                lam [x] (unhandled_exn (Var x));
-               lam [x; kv; g] (unhandled_effect (Var x) (Var kv));
-               lam [x] (Var x)]
+               lam [x; kv] (unhandled_effect (Var x) (Var kv))]
 
 (* Interpreter ****************************************************************)
 
