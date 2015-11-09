@@ -37,15 +37,14 @@ and t =
   | Atom of atom
   | Prim of (env -> t list -> env * t) * t list
   | Perform of t
-  | Handle of handler
-  | Continue of t * t
+  | Alloc_stack of handlers
+  | Resume of t * t * t
   | Delegate of t * t
   | Raise of t
 
-and handler = { body: t;
-                hv: Ident.t * t;
-                hx: Ident.t * t;
-                hf: Ident.t * Ident.t * t }
+and handlers = { hv: Ident.t * t;
+                 hx: Ident.t * t;
+                 hf: Ident.t * Ident.t * t }
 
 (* A runtime value: a closure of a term with its environment.
 
@@ -85,6 +84,19 @@ let int (x: int): t = Atom (Int x)
 let string (s: string): t = Atom (String s)
 let unit : t = Atom Unit
 
+(* Effects wrappers. *)
+let continue k e =
+  let x = Ident.create "x" in
+  Resume (k, Lambda (x, Var x), e)
+
+let discontinue k exn =
+  let x = Ident.create "x" in
+  Resume (k, Lambda (x, Raise (Var x)), exn)
+
+let handle body handlers =
+  let x = Ident.create "x" in
+  Resume (Alloc_stack handlers, Lambda (x, body), unit)
+
 (* Printers. *)
 
 let print_atom ppf = function
@@ -123,16 +135,18 @@ let print_t ppf =
         (aux false) e
         (if paren then ")" else "")
 
-    | Handle {body; hv = (v, hv); hf = (e, k, hf)} ->
-      fprintf ppf "@[<2>%shandle@ %a@ with@ %s@ ->@ %a@ |@ effect@ %s@ %s@ ->@ %a%s@]"
+    | Alloc_stack {hv = (v, hv); hx = (x, hx); hf = (e, k, hf)} ->
+      fprintf ppf "@[<2>%sstack@ with@ %s@ ->@ %a@ |@ exn@ %s@ ->@ %a@ |@ effect@ %s@ %s@ ->@ %a%s@]"
         (if paren then "(" else "")
-        (aux false) body v (aux false) hv e k (aux false) hf
+        v (aux false) hv x (aux false) hx e k (aux false) hf
         (if paren then ")" else "")
-    | Continue (k, e) ->
-      fprintf ppf "@[<2>%scontinue @ %a@ %a%s@]"
+
+    | Resume (stack, f, v) ->
+      fprintf ppf "@[<2>%sresume@ %a@ %a@ %a%s@]"
         (if paren then "(" else "")
-        (aux false) k (aux false) e
+        (aux false) stack (aux false) f (aux false) v
         (if paren then ")" else "")
+
     | Delegate (e, k) ->
       fprintf ppf "@[<2>%sdelegate @ %a@ %a%s@]"
         (if paren then "(" else "")
@@ -267,33 +281,34 @@ let rec cps e =
         (Var kx) (Var kf)
     )
 
-  | Handle {body; hv = (v, hv); hx = (vx, hx); hf = (ve, vk, hf)} ->
+  | Alloc_stack { hv = (v, hv); hx = (vx, hx); hf = (ve, vk, hf) } ->
+    let f = Ident.create "f" in
     let x = Ident.create "x" in
-    lam [k; kx; kf]
-      (app (Var k) [
-          (cont (cps body)
-             (lam [v] (cont (cps hv) (lam [x] (Var x)) (Var kx) (Var kf)))
-             (lam [vx] (cont (cps hx) (lam [x] (Var x)) (Var kx) (Var kf)))
-             (lam [ve; vk] (cont (cps hf) (lam [x] (Var x)) (Var kx) (Var kf))))
-        ])
+    let identity = Lambda (x, Var x) in
+    let stack = lam [f; x]
+        (app (Var f) [Var x;
+                      lam [v] (cont (cps hv) identity (Var kx) (Var kf));
+                      lam [vx] (cont (cps hx) identity (Var kx) (Var kf));
+                      lam [ve; vk] (cont (cps hf) identity (Var kx) (Var kf))]) in
+    lam [k; kx; kf] (App (Var k, stack))
 
-  | Continue (stack, e) ->
-    let val_e = Ident.create "ve" in
-    let x = Ident.create "x" in
-    let val_stack = Ident.create "stack" in
-    lam [k; kx; kf] (
-      cont (cps e)
-        (lam [val_e]
-           (cont (cps stack)
-              (lam [val_stack]
-                 (App (Var k,
-                       (app (Var val_stack) [
-                           lam [x; k; kx; kf] (App (Var k, Var x));
-                           Var val_e
-                         ]))))
-              (Var kx) (Var kf)))
-        (Var kx) (Var kf)
-    )
+  | Resume (stack, f, v) ->
+    let fv = Ident.create "f" in
+    let vv = Ident.create "vv" in
+    let stackv = Ident.create "stack" in
+    lam [k; kx; kf]
+      (cont (cps v)
+         (lam [vv]
+            (cont (cps f)
+               (lam [fv]
+                  (cont (cps stack)
+                     (lam [stackv]
+                        (app (Var k) [
+                            app (Var stackv) [Var fv; Var vv]
+                          ]))
+                     (Var kx) (Var kf)))
+               (Var kx) (Var kf)))
+         (Var kx) (Var kf))
 
   | Delegate (e, stack) ->
     let val_e = Ident.create "ve" in
@@ -437,65 +452,56 @@ let ex2 =
 let ex3 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  Handle {
-    body = seq [printl (string "abc");
-                printl (Perform (int 0));
-                printl (string "def")];
-    hv = identity;
-    hx = reraise;
-    hf = e, k, Continue (Var k, int 18)
-  }
+  handle
+    (seq [printl (string "abc");
+          printl (Perform (int 0));
+          printl (string "def")])
+    { hv = identity;
+      hx = reraise;
+      hf = e, k, continue (Var k) (int 18) }
 
 let ex3_1 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  Handle {
-    body = Perform (int 0);
-    hv = identity;
-    hx = reraise;
-    hf = e, k, Continue (Var k, int 18)
-  }
-
+  handle
+    (Perform (int 0))
+    { hv = identity;
+      hx = reraise;
+      hf = e, k, continue (Var k) (int 18) }
 
 let ex4 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  Handle {
-    body =
-      Handle {
-        body = seq [printl (string "abc");
-                    printl (Perform (int 0));
-                    printl (string "def")];
-        hv = identity;
+  handle
+    (handle
+      (seq [printl (string "abc");
+            printl (Perform (int 0));
+            printl (string "def")])
+      { hv = identity;
         hx = reraise;
-        hf = delegate;
-      };
-    hv = identity;
-    hx = reraise;
-    hf = e, k, Continue (Var k, int 18)
-  }
+        hf = delegate; })
+    { hv = identity;
+      hx = reraise;
+      hf = e, k, continue (Var k) (int 18) }
 
 let ex5 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  Handle {
-    body = seq [printl (string "abc");
-                printl (Perform (int 0));
-                printl (string "def")];
-    hv = identity;
-    hx = reraise;
-    hf = e, k, seq [Continue (Var k, int 18);
-                    printl (string "handler end")]
-  }
+  handle
+    (seq [printl (string "abc");
+          printl (Perform (int 0));
+          printl (string "def")])
+    { hv = identity;
+      hx = reraise;
+      hf = e, k, seq [continue (Var k) (int 18);
+                      printl (string "handler end")] }
 
 let ex6 =
   seq [
-    Handle {
-      body = unit;
-      hv = identity;
-      hx = reraise;
-      hf = delegate;
-    };
+    handle unit
+      { hv = identity;
+        hx = reraise;
+        hf = delegate; };
     printl (string "abc")
   ]
 
@@ -503,44 +509,40 @@ let ex7 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
   let v = Ident.create "my_v" in
-  Handle {
-    body = seq [Perform unit; Perform unit];
-    hv = v, seq [printl (string "hv"); Var v];
-    hx = reraise;
-    hf = e, k, seq [
-        printl (string "hf1");
-        Continue (Var k, unit);
-        printl (string "hf2")
-      ]
-  }
+  handle
+    (seq [Perform unit; Perform unit])
+    { hv = v, seq [printl (string "hv"); Var v];
+      hx = reraise;
+      hf = e, k, seq [
+          printl (string "hf1");
+          continue (Var k) unit;
+          printl (string "hf2")
+        ]
+    }
 
 let ex8 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
-  Handle {
-    body = seq [printl (string "a");
-                printl (Perform (int 0));
-                printl (string "b")];
-    hv = identity;
-    hx = reraise;
-    hf = e, k, Continue (seq [printl ex3_1; Var k],
-                         int 19)
-  }
+  handle
+    (seq [printl (string "a");
+          printl (Perform (int 0));
+          printl (string "b")])
+    { hv = identity;
+      hx = reraise;
+      hf = e, k, continue (seq [printl ex3_1; Var k]) (int 19) }
 
 (* Evaluates to 1 *)
 let ex9 =
   let e = Ident.create "my_e" in
   let k = Ident.create "my_k" in
   let v = Ident.create "my_v" in
-  Handle {
-    body =
-      Handle {
-        body = Perform unit;
-        hv = identity;
-        hx = v, int 0;
-        hf = e, k, Raise unit;
-      };
-    hv = identity;
-    hx = v, int 1;
-    hf = delegate;
-  }
+  handle
+    (handle
+       (Perform unit)
+       { hv = identity;
+         hx = v, int 0;
+         hf = e, k, Raise unit; };)
+   { hv = identity;
+     hx = v, int 1;
+     hf = delegate; }
+  
