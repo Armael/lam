@@ -71,7 +71,7 @@ Sugar-free version:
 #### continue
 
 ```
-⟦continue stack e⟧ =
+⟦continue stack x⟧ =
   λk k_f.
     ⟦x⟧ (λv.
       ⟦stack⟧ (λstack.
