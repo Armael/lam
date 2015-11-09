@@ -504,13 +504,13 @@ let ex7 =
   let k = Ident.create "my_k" in
   let v = Ident.create "my_v" in
   Handle {
-    body = seq [Perform unit; Perform unit];
-    hv = v, seq [printl (string "hv"); Var v];
+    body = seq [Perform unit; Perform unit; print (string "1")];
+    hv = v, seq [print (string "2"); Var v];
     hx = reraise;
     hf = e, k, seq [
-        printl (string "hf1");
+        print (string "3");
         Continue (Var k, unit);
-        printl (string "hf2")
+        print (string "4")
       ]
   }
 
