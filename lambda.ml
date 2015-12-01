@@ -18,11 +18,11 @@ end
 
 (* Our lambda calculus, which is standard lambda-calculus, plus:
 
-   - atoms
-   - primitives, which are basically OCaml functions along with their
-     arity (in order to know when to only collect the arguments and
-     where to apply the function)
-   - effects primitives: perform, handle, continue and delegate
+   - atoms;
+   - primitives: basically ocaml functions, applied to λ-terms.
+     The arguments are guaranteed to be reduced before being given
+     to the function;
+   - effects primitives: perform, resume, delegate and alloc_stack.
 *)
 
 type atom =
@@ -48,8 +48,8 @@ and handlers = { hv: Ident.t * t;
 
 (* A runtime value: a closure of a term with its environment.
 
-   This is defined now because primitives take runtime values as
-   arguments.
+   It is defined now as primitives can access and modify the runtime
+   environment; and thus take it as an argument and return it.
 *)
 and value = Closure of env * t
 and env = value Ident.Map.t
@@ -545,4 +545,3 @@ let ex9 =
    { hv = identity;
      hx = v, int 1;
      hf = delegate; }
-  
