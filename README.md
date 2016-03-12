@@ -4,7 +4,7 @@
 
 ```
 ⟦alloc_stack (v ↦ eᵥ) (vₑ vₖ ↦ e_f)⟧ =
-  λk. k (λf x k'. f x (λv. λ_ _. ⟦eᵥ⟧) (λvₑ vₖ. ⟦e_f⟧) k')
+  λk. k (λf x k'. f x (λv. λ_. ⟦eᵥ⟧) (λvₑ vₖ. ⟦e_f⟧) k')
 ```
 
 #### resume
